@@ -15,11 +15,20 @@ import { formatCurrency } from "@/lib/format";
 const MEETING_TYPES = ["פרונטלית", "טלפונית", "וידאו", "ביקור בית", "אחר"];
 const STATUSES = ["פתוח", "בוצע", "בוטל"];
 const ATTENDANCE = ["נוכח", "לא נוכח", "ביטל", "דחה"];
+const PAYMENT_STATUSES = ["לא שולם", "שולם חלקית", "שולם", "לא לחיוב"];
+const REMINDER_OPTIONS = [
+  { value: 1440, label: "יום לפני" },
+  { value: 120, label: "שעתיים לפני" },
+  { value: 60, label: "שעה לפני" },
+  { value: 30, label: "30 דקות לפני" },
+];
 
 const emptyForm = {
   patient_id: "",
   date_gregorian: "",
   date_hebrew: "",
+  start_time: "",
+  end_time: "",
   hours: "",
   task_definition: "",
   meeting_details: "",
@@ -34,7 +43,25 @@ const emptyForm = {
   total_before_discount: "",
   total_after_discount: "",
   status: "פתוח",
+  payment_status: "לא שולם",
+  is_future: false,
+  send_reminder: false,
+  reminder_offset_minutes: "",
 };
+
+function calcHoursFromTimes(start, end) {
+  if (!start || !end) return null;
+  const sp = String(start).split(":").map(Number);
+  const ep = String(end).split(":").map(Number);
+  if (sp.length < 2 || ep.length < 2) return null;
+  const [sh, sm] = sp;
+  const [eh, em] = ep;
+  if (![sh, sm, eh, em].every((n) => Number.isFinite(n))) return null;
+  let startMin = sh * 60 + sm;
+  let endMin = eh * 60 + em;
+  if (endMin < startMin) endMin += 24 * 60; // overnight handling
+  return (endMin - startMin) / 60;
+}
 
 function toNumber(v) {
   if (v === "" || v === null || v === undefined) return 0;
@@ -47,6 +74,17 @@ function StatusBadge({ status }) {
     "פתוח": "badge-warning",
     "בוצע": "badge-success",
     "בוטל": "badge-neutral",
+  };
+  const cls = map[status] || "badge-neutral";
+  return <span className={cls}>{status || "—"}</span>;
+}
+
+function PaymentBadge({ status }) {
+  const map = {
+    "שולם": "badge-success",
+    "שולם חלקית": "badge-warning",
+    "לא שולם": "badge-danger",
+    "לא לחיוב": "badge-neutral",
   };
   const cls = map[status] || "badge-neutral";
   return <span className={cls}>{status || "—"}</span>;
@@ -93,6 +131,14 @@ function TaskDetails({ task }) {
           value={Number(task.hours || 0).toFixed(2)}
         />
         <DetailField label="סוג פגישה" value={task.meeting_type} />
+        <DetailField
+          label="שעת התחלה"
+          value={task.start_time ? String(task.start_time).slice(0, 5) : null}
+        />
+        <DetailField
+          label="שעת סיום"
+          value={task.end_time ? String(task.end_time).slice(0, 5) : null}
+        />
         <DetailField label="נוכחות" value={task.attendance} />
         <DetailField label="נסיעות" value={task.travel} />
         <DetailField
@@ -100,8 +146,12 @@ function TaskDetails({ task }) {
           value={formatCurrency(task.travel_payment)}
         />
         <DetailField
-          label="סטטוס"
+          label="סטטוס פגישה"
           value={<StatusBadge status={task.status} />}
+        />
+        <DetailField
+          label="סטטוס תשלום"
+          value={<PaymentBadge status={task.payment_status} />}
         />
         <DetailField
           label="סה״כ לפני הנחה"
@@ -120,6 +170,25 @@ function TaskDetails({ task }) {
         <DetailBlock label="פירוט מייל" text={task.email_details} />
         <DetailBlock label="פירוט אחר" text={task.other_details} />
       </div>
+
+      {task.is_future && (
+        <div className="card p-4 border-sky-200 bg-sky-50 text-sm">
+          <div className="font-semibold text-sky-900 mb-1">פגישה עתידית</div>
+          <div className="text-sky-900">
+            {task.send_reminder
+              ? `תזכורת מתוכננת ${
+                  task.reminder_offset_minutes
+                    ? task.reminder_offset_minutes >= 1440
+                      ? `${Math.round(task.reminder_offset_minutes / 1440)} ימים לפני`
+                      : task.reminder_offset_minutes >= 60
+                        ? `${Math.round(task.reminder_offset_minutes / 60)} שעות לפני`
+                        : `${task.reminder_offset_minutes} דקות לפני`
+                    : "(זמן לא הוגדר)"
+                }`
+              : "ללא תזכורת"}
+          </div>
+        </div>
+      )}
 
       {task.documents_url && (
         <a
@@ -203,7 +272,25 @@ export default function TasksPage() {
   function update(field, value) {
     setForm((f) => {
       const next = { ...f, [field]: value };
-      if (field === "patient_id" || field === "hours") {
+
+      // Auto-calc hours when start_time / end_time change
+      if (field === "start_time" || field === "end_time") {
+        const calc = calcHoursFromTimes(
+          field === "start_time" ? value : next.start_time,
+          field === "end_time" ? value : next.end_time,
+        );
+        if (calc !== null) {
+          next.hours = calc.toFixed(2);
+        }
+      }
+
+      // Recompute totals when patient_id / hours / time changes
+      if (
+        field === "patient_id" ||
+        field === "hours" ||
+        field === "start_time" ||
+        field === "end_time"
+      ) {
         const totals = computeTotals(
           field === "patient_id" ? value : next.patient_id,
           field === "hours" ? value : next.hours,
@@ -213,6 +300,7 @@ export default function TasksPage() {
           next.total_after_discount = totals.after;
         }
       }
+
       return next;
     });
   }
@@ -240,6 +328,8 @@ export default function TasksPage() {
       patient_id: t.patient_id || "",
       date_gregorian: t.date_gregorian || "",
       date_hebrew: t.date_hebrew || "",
+      start_time: t.start_time ? String(t.start_time).slice(0, 5) : "",
+      end_time: t.end_time ? String(t.end_time).slice(0, 5) : "",
       hours: t.hours ?? "",
       task_definition: t.task_definition || "",
       meeting_details: t.meeting_details || "",
@@ -254,6 +344,10 @@ export default function TasksPage() {
       total_before_discount: t.total_before_discount ?? "",
       total_after_discount: t.total_after_discount ?? "",
       status: t.status || "פתוח",
+      payment_status: t.payment_status || "לא שולם",
+      is_future: !!t.is_future,
+      send_reminder: !!t.send_reminder,
+      reminder_offset_minutes: t.reminder_offset_minutes ?? "",
     });
     setFormOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -284,6 +378,8 @@ export default function TasksPage() {
       patient_id: form.patient_id || null,
       date_gregorian: form.date_gregorian || null,
       date_hebrew: form.date_hebrew || null,
+      start_time: form.start_time || null,
+      end_time: form.end_time || null,
       hours: toNumber(form.hours),
       task_definition: form.task_definition || null,
       meeting_details: form.meeting_details || null,
@@ -298,6 +394,13 @@ export default function TasksPage() {
       total_before_discount: toNumber(form.total_before_discount),
       total_after_discount: toNumber(form.total_after_discount),
       status: form.status || "פתוח",
+      payment_status: form.payment_status || "לא שולם",
+      is_future: !!form.is_future,
+      send_reminder: !!form.send_reminder,
+      reminder_offset_minutes:
+        form.reminder_offset_minutes === ""
+          ? null
+          : Number(form.reminder_offset_minutes),
     };
 
     let res;
@@ -433,6 +536,24 @@ export default function TasksPage() {
           </div>
 
           <div>
+            <label className="label">שעת התחלה</label>
+            <input
+              type="time"
+              className="input"
+              value={form.start_time}
+              onChange={(e) => update("start_time", e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">שעת סיום</label>
+            <input
+              type="time"
+              className="input"
+              value={form.end_time}
+              onChange={(e) => update("end_time", e.target.value)}
+            />
+          </div>
+          <div>
             <label className="label">משך שעות</label>
             <input
               type="number"
@@ -443,6 +564,11 @@ export default function TasksPage() {
               value={form.hours}
               onChange={(e) => update("hours", e.target.value)}
             />
+            {form.start_time && form.end_time && (
+              <p className="text-xs text-ink-500 mt-1">
+                מחושב אוטומטית; ניתן לדרוס ידנית.
+              </p>
+            )}
             {selectedPatient && (
               <p className="text-xs text-ink-500 mt-1">
                 {selectedPatient.treatment_type
@@ -528,13 +654,27 @@ export default function TasksPage() {
             />
           </div>
           <div>
-            <label className="label">סטטוס</label>
+            <label className="label">סטטוס פגישה</label>
             <select
               className="input"
               value={form.status}
               onChange={(e) => update("status", e.target.value)}
             >
               {STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">סטטוס תשלום</label>
+            <select
+              className="input"
+              value={form.payment_status}
+              onChange={(e) => update("payment_status", e.target.value)}
+            >
+              {PAYMENT_STATUSES.map((s) => (
                 <option key={s} value={s}>
                   {s}
                 </option>
@@ -614,6 +754,56 @@ export default function TasksPage() {
               onChange={(e) => update("total_after_discount", e.target.value)}
             />
           </div>
+        </div>
+
+        <div className="border-t border-line pt-5 space-y-3">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={form.is_future}
+              onChange={(e) => update("is_future", e.target.checked)}
+            />
+            <span className="text-sm font-medium text-ink-900">
+              פגישה עתידית
+            </span>
+          </label>
+
+          {form.is_future && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pr-6">
+              <label className="flex items-center gap-2 md:col-span-1">
+                <input
+                  type="checkbox"
+                  checked={form.send_reminder}
+                  onChange={(e) =>
+                    update("send_reminder", e.target.checked)
+                  }
+                />
+                <span className="text-sm text-ink-900">שלח תזכורת במייל</span>
+              </label>
+              {form.send_reminder && (
+                <div className="md:col-span-2">
+                  <label className="label">מתי לשלוח</label>
+                  <select
+                    className="input"
+                    value={form.reminder_offset_minutes}
+                    onChange={(e) =>
+                      update("reminder_offset_minutes", e.target.value)
+                    }
+                  >
+                    <option value="">— בחרי —</option>
+                    {REMINDER_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-ink-500 mt-1">
+                    שליחה אמיתית עוד לא מחוברת — הערכים נשמרים בלבד.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {error && <p className="text-red-700 text-sm">{error}</p>}
@@ -724,6 +914,7 @@ export default function TasksPage() {
               <th>סוג פגישה</th>
               <th>שעות</th>
               <th>תשלום</th>
+              <th>סטטוס תשלום</th>
               <th>סטטוס</th>
               <th className="w-24"></th>
             </tr>
@@ -731,13 +922,13 @@ export default function TasksPage() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} className="text-center text-ink-500 py-6">
+                <td colSpan={10} className="text-center text-ink-500 py-6">
                   טוען...
                 </td>
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={9} className="text-center text-ink-500 py-6">
+                <td colSpan={10} className="text-center text-ink-500 py-6">
                   אין משימות להצגה
                 </td>
               </tr>
@@ -784,6 +975,9 @@ export default function TasksPage() {
                       <td>{Number(t.hours || 0).toFixed(2)}</td>
                       <td className="font-semibold">
                         {formatCurrency(t.total_after_discount)}
+                      </td>
+                      <td>
+                        <PaymentBadge status={t.payment_status} />
                       </td>
                       <td>
                         <StatusBadge status={t.status} />

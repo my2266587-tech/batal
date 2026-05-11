@@ -170,6 +170,9 @@ const SYNONYMS = {
   attendance: ["נוכחות"],
   total_before_discount: ['סה"כ לתשלום לפני הנחה', "סהכ לפני הנחה", "לפני הנחה"],
   total_after_discount: ['סה"כ לתשלום אחרי הנחה', "סהכ אחרי הנחה", "אחרי הנחה"],
+  payment_status: ["סטטוס תשלום", "תשלום סטטוס", "payment status"],
+  start_time: ["שעת התחלה", "שעת ההתחלה", "התחלה", "start time"],
+  end_time: ["שעת סיום", "שעת הסיום", "סיום", "end time"],
   notes: ["הערות", "notes"],
   // cash-specific
   amount: ["סכום", "amount"],
@@ -243,6 +246,9 @@ const TARGET_FIELD_LABELS = {
   attendance: "נוכחות",
   total_before_discount: 'סה"כ לפני הנחה',
   total_after_discount: 'סה"כ אחרי הנחה',
+  payment_status: "סטטוס תשלום",
+  start_time: "שעת התחלה",
+  end_time: "שעת סיום",
   notes: "הערות",
   amount: "סכום",
   purpose: "עבור",
@@ -476,9 +482,17 @@ async function parseTasks(rows, columnMap) {
     );
     const notesVal = String(getCell(r, columnMap.notes) ?? "").trim();
 
+    const paymentRaw = String(
+      getCell(r, columnMap.payment_status) ?? "",
+    ).trim();
+    const startRaw = String(getCell(r, columnMap.start_time) ?? "").trim();
+    const endRaw = String(getCell(r, columnMap.end_time) ?? "").trim();
+
     const task = {
       date_gregorian,
       date_hebrew: String(getCell(r, columnMap.date_hebrew) ?? "").trim() || null,
+      start_time: startRaw || null,
+      end_time: endRaw || null,
       hours,
       task_definition:
         String(getCell(r, columnMap.task_definition) ?? "").trim() || null,
@@ -494,6 +508,10 @@ async function parseTasks(rows, columnMap) {
       total_before_discount: totalBefore ?? 0,
       total_after_discount: totalAfter ?? 0,
       status: "פתוח",
+      payment_status:
+        ["לא שולם", "שולם חלקית", "שולם", "לא לחיוב"].includes(paymentRaw)
+          ? paymentRaw
+          : "לא שולם",
     };
 
     if (detailField && detailText) task[detailField] = detailText;

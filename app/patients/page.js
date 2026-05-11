@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import { DeleteIcon, EditIcon, IconButton } from "@/components/Icons";
@@ -26,6 +27,8 @@ function toNumOrNull(v) {
 }
 
 export default function PatientsPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -52,6 +55,19 @@ export default function PatientsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  // Handle ?edit=<id> coming from the patient card "edit" link
+  useEffect(() => {
+    const editId = searchParams.get("edit");
+    if (editId && patients.length > 0) {
+      const p = patients.find((x) => x.id === editId);
+      if (p) {
+        startEdit(p);
+        router.replace("/patients");
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, patients]);
 
   function update(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -293,7 +309,11 @@ export default function PatientsPage() {
               </tr>
             ) : (
               patients.map((p) => (
-                <tr key={p.id}>
+                <tr
+                  key={p.id}
+                  onClick={() => router.push(`/patients/${p.id}`)}
+                  className="cursor-pointer"
+                >
                   <td className="font-medium">{p.full_name}</td>
                   <td>{p.phone}</td>
                   <td>{p.email}</td>
@@ -315,7 +335,7 @@ export default function PatientsPage() {
                       ? new Date(p.created_at).toLocaleDateString("he-IL")
                       : ""}
                   </td>
-                  <td>
+                  <td onClick={(e) => e.stopPropagation()}>
                     <div className="flex gap-1 justify-end">
                       <IconButton
                         variant="edit"

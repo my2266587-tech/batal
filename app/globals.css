@@ -81,6 +81,8 @@ html, body {
   }
   .badge-success { @apply badge bg-emerald-50 text-emerald-700; }
   .badge-warning { @apply badge bg-amber-50 text-amber-700; }
+  .badge-danger  { @apply badge bg-red-50 text-red-700; }
+  .badge-info    { @apply badge bg-sky-50 text-sky-700; }
   .badge-info { @apply badge bg-sky-50 text-sky-700; }
   .badge-neutral { @apply badge bg-slate-100 text-slate-700; }
   .badge-accent { @apply badge bg-accent-50 text-accent-700; }
