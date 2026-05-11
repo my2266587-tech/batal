@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
+import { formatCurrency } from "@/lib/format";
 
 export default function SummaryPage() {
   const [tasks, setTasks] = useState([]);
@@ -120,13 +121,13 @@ export default function SummaryPage() {
         <div className="stat-card">
           <div className="stat-label">לפני הנחה (החודש)</div>
           <div className="stat-value-accent">
-            {loading ? "—" : `₪${monthly.before.toFixed(2)}`}
+            {loading ? "—" : formatCurrency(monthly.before)}
           </div>
         </div>
         <div className="stat-card">
           <div className="stat-label">אחרי הנחה (החודש)</div>
           <div className="stat-value-accent">
-            {loading ? "—" : `₪${monthly.after.toFixed(2)}`}
+            {loading ? "—" : formatCurrency(monthly.after)}
           </div>
         </div>
       </section>
@@ -169,11 +170,11 @@ export default function SummaryPage() {
                     <td className="font-medium">{row.name}</td>
                     <td>{row.count}</td>
                     <td>{row.hours.toFixed(2)}</td>
-                    <td>₪{row.before.toFixed(2)}</td>
+                    <td>{formatCurrency(row.before)}</td>
                     <td className="font-semibold">
-                      ₪{row.after.toFixed(2)}
+                      {formatCurrency(row.after)}
                     </td>
-                    <td>₪{row.travel.toFixed(2)}</td>
+                    <td>{formatCurrency(row.travel)}</td>
                   </tr>
                 ))
               )}

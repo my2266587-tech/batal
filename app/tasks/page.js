@@ -1,8 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
+import {
+  ChevronDownIcon,
+  DeleteIcon,
+  DocumentIcon,
+  EditIcon,
+  IconButton,
+} from "@/components/Icons";
+import { formatCurrency } from "@/lib/format";
 
 const MEETING_TYPES = ["פרונטלית", "טלפונית", "וידאו", "ביקור בית", "אחר"];
 const STATUSES = ["פתוח", "בוצע", "בוטל"];
@@ -34,6 +42,100 @@ function toNumber(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function StatusBadge({ status }) {
+  const map = {
+    "פתוח": "badge-warning",
+    "בוצע": "badge-success",
+    "בוטל": "badge-neutral",
+  };
+  const cls = map[status] || "badge-neutral";
+  return <span className={cls}>{status || "—"}</span>;
+}
+
+function DetailField({ label, value }) {
+  return (
+    <div>
+      <div className="text-xs text-ink-500 mb-0.5">{label}</div>
+      <div className="text-sm text-ink-900">{value || "—"}</div>
+    </div>
+  );
+}
+
+function DetailBlock({ label, text }) {
+  if (!text) return null;
+  return (
+    <div className="md:col-span-4">
+      <div className="text-xs text-ink-500 mb-1.5">{label}</div>
+      <div className="bg-white border border-line rounded-md p-3 text-sm whitespace-pre-wrap leading-6">
+        {text}
+      </div>
+    </div>
+  );
+}
+
+function TaskDetails({ task }) {
+  const before = Number(task.total_before_discount) || 0;
+  const after = Number(task.total_after_discount) || 0;
+  return (
+    <div className="p-6 space-y-5 border-t border-line">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <DetailField
+          label="תאריך לועזי"
+          value={
+            task.date_gregorian
+              ? new Date(task.date_gregorian).toLocaleDateString("he-IL")
+              : null
+          }
+        />
+        <DetailField label="תאריך עברי" value={task.date_hebrew} />
+        <DetailField
+          label="משך שעות"
+          value={Number(task.hours || 0).toFixed(2)}
+        />
+        <DetailField label="סוג פגישה" value={task.meeting_type} />
+        <DetailField label="נוכחות" value={task.attendance} />
+        <DetailField label="נסיעות" value={task.travel} />
+        <DetailField
+          label="תשלום נסיעה"
+          value={formatCurrency(task.travel_payment)}
+        />
+        <DetailField
+          label="סטטוס"
+          value={<StatusBadge status={task.status} />}
+        />
+        <DetailField
+          label="סה״כ לפני הנחה"
+          value={formatCurrency(before)}
+        />
+        <DetailField
+          label="סה״כ אחרי הנחה"
+          value={formatCurrency(after)}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <DetailBlock label="הגדרת משימה" text={task.task_definition} />
+        <DetailBlock label="פירוט פגישה" text={task.meeting_details} />
+        <DetailBlock label="פירוט שיחה" text={task.call_details} />
+        <DetailBlock label="פירוט מייל" text={task.email_details} />
+        <DetailBlock label="פירוט אחר" text={task.other_details} />
+      </div>
+
+      {task.documents_url && (
+        <a
+          href={task.documents_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 text-sm text-accent-700 hover:underline font-medium"
+        >
+          <DocumentIcon className="w-4 h-4" />
+          פתיחת מסמך מצורף
+        </a>
+      )}
+    </div>
+  );
+}
+
 export default function TasksPage() {
   const [tasks, setTasks] = useState([]);
   const [patients, setPatients] = useState([]);
@@ -42,6 +144,8 @@ export default function TasksPage() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [expandedId, setExpandedId] = useState(null);
 
   // filters
   const [filterPatient, setFilterPatient] = useState("");
@@ -64,7 +168,9 @@ export default function TasksPage() {
         .order("created_at", { ascending: false }),
       supabase
         .from("patients")
-        .select("id, full_name, treatment_type, hourly_rate, hourly_rate_discounted")
+        .select(
+          "id, full_name, status, treatment_type, hourly_rate, hourly_rate_discounted",
+        )
         .order("full_name"),
     ]);
     if (tRes.error) setError(tRes.error.message);
@@ -116,6 +222,18 @@ export default function TasksPage() {
     setEditingId(null);
   }
 
+  function openAddForm() {
+    resetForm();
+    setError("");
+    setFormOpen(true);
+  }
+
+  function closeForm() {
+    setFormOpen(false);
+    resetForm();
+    setError("");
+  }
+
   function startEdit(t) {
     setEditingId(t.id);
     setForm({
@@ -137,6 +255,7 @@ export default function TasksPage() {
       total_after_discount: t.total_after_discount ?? "",
       status: t.status || "פתוח",
     });
+    setFormOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -190,7 +309,7 @@ export default function TasksPage() {
     if (res.error) setError(res.error.message);
     setSaving(false);
     if (!res.error) {
-      resetForm();
+      closeForm();
       load();
     }
   }
@@ -211,6 +330,11 @@ export default function TasksPage() {
   const selectedPatient = useMemo(
     () => patients.find((p) => p.id === form.patient_id) || null,
     [patients, form.patient_id],
+  );
+
+  const activePatientsCount = useMemo(
+    () => patients.filter((p) => (p.status || "פעיל") === "פעיל").length,
+    [patients],
   );
 
   const filtered = useMemo(() => {
@@ -257,9 +381,17 @@ export default function TasksPage() {
           <h1 className="page-title">ניהול משימות</h1>
           <p className="page-subtitle">ניהול פגישות ומשימות עבור כל המטופלים.</p>
         </div>
-        <span className="text-sm text-ink-500">סה״כ מוצג: {filtered.length}</span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-ink-500">סה״כ מוצג: {filtered.length}</span>
+          {!formOpen && (
+            <button type="button" className="btn-primary" onClick={openAddForm}>
+              + הוספת משימה
+            </button>
+          )}
+        </div>
       </header>
 
+      {formOpen && (
       <form onSubmit={handleSubmit} className="card p-6 space-y-5">
         <h2 className="section-title">
           {editingId ? "עריכת משימה" : "הוספת משימה"}
@@ -317,12 +449,12 @@ export default function TasksPage() {
                   ? `${selectedPatient.treatment_type} · `
                   : ""}
                 תעריף: {selectedPatient.hourly_rate != null
-                  ? `₪${Number(selectedPatient.hourly_rate).toFixed(2)}`
+                  ? formatCurrency(selectedPatient.hourly_rate)
                   : "—"}
                 {selectedPatient.hourly_rate_discounted != null
-                  ? ` · אחרי הנחה: ₪${Number(
+                  ? ` · אחרי הנחה: ${formatCurrency(
                       selectedPatient.hourly_rate_discounted,
-                    ).toFixed(2)}`
+                    )}`
                   : ""}
               </p>
             )}
@@ -490,13 +622,12 @@ export default function TasksPage() {
           <button type="submit" className="btn-primary" disabled={saving}>
             {saving ? "שומר..." : editingId ? "עדכן משימה" : "שמור משימה"}
           </button>
-          {editingId && (
-            <button type="button" className="btn-ghost" onClick={resetForm}>
-              ביטול
-            </button>
-          )}
+          <button type="button" className="btn-ghost" onClick={closeForm}>
+            ביטול
+          </button>
         </div>
       </form>
+      )}
 
       <div className="card p-5 space-y-4">
         <h2 className="section-title">סינון</h2>
@@ -567,22 +698,18 @@ export default function TasksPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="stat-card">
           <div className="stat-label">סך שעות</div>
           <div className="stat-value">{totals.hours.toFixed(2)}</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">סך נסיעות</div>
-          <div className="stat-value">₪{totals.travel.toFixed(2)}</div>
+          <div className="stat-label">משימות / פגישות</div>
+          <div className="stat-value">{filtered.length}</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">לפני הנחה</div>
-          <div className="stat-value">₪{totals.sumBefore.toFixed(2)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">אחרי הנחה</div>
-          <div className="stat-value">₪{totals.sumAfter.toFixed(2)}</div>
+          <div className="stat-label">מטופלות פעילות</div>
+          <div className="stat-value">{activePatientsCount}</div>
         </div>
       </div>
 
@@ -590,76 +717,109 @@ export default function TasksPage() {
         <table className="table-base">
           <thead>
             <tr>
+              <th className="w-8"></th>
               <th>תאריך</th>
               <th>מטופל</th>
               <th>משימה</th>
               <th>סוג פגישה</th>
               <th>שעות</th>
-              <th>נוכחות</th>
-              <th>נסיעה</th>
-              <th>לפני הנחה</th>
-              <th>אחרי הנחה</th>
+              <th>תשלום</th>
               <th>סטטוס</th>
-              <th></th>
+              <th className="w-24"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={11} className="text-center text-ink-500 py-6">
+                <td colSpan={9} className="text-center text-ink-500 py-6">
                   טוען...
                 </td>
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={11} className="text-center text-ink-500 py-6">
+                <td colSpan={9} className="text-center text-ink-500 py-6">
                   אין משימות להצגה
                 </td>
               </tr>
             ) : (
-              filtered.map((t) => (
-                <tr key={t.id}>
-                  <td className="whitespace-nowrap">
-                    {t.date_gregorian
-                      ? new Date(t.date_gregorian).toLocaleDateString("he-IL")
-                      : ""}
-                    {t.date_hebrew && (
-                      <div className="text-xs text-ink-500">{t.date_hebrew}</div>
+              filtered.map((t) => {
+                const isExpanded = expandedId === t.id;
+                return (
+                  <Fragment key={t.id}>
+                    <tr
+                      onClick={() =>
+                        setExpandedId(isExpanded ? null : t.id)
+                      }
+                      className="cursor-pointer"
+                    >
+                      <td className="text-center">
+                        <ChevronDownIcon
+                          className={
+                            "w-4 h-4 text-ink-400 transition-transform inline-block " +
+                            (isExpanded ? "rotate-180" : "")
+                          }
+                        />
+                      </td>
+                      <td className="whitespace-nowrap">
+                        {t.date_gregorian
+                          ? new Date(t.date_gregorian).toLocaleDateString(
+                              "he-IL",
+                            )
+                          : ""}
+                        {t.date_hebrew && (
+                          <div className="text-xs text-ink-500">
+                            {t.date_hebrew}
+                          </div>
+                        )}
+                      </td>
+                      <td className="font-medium">
+                        {patientNameById[t.patient_id] || "—"}
+                      </td>
+                      <td className="max-w-xs">
+                        <div className="line-clamp-2 text-sm whitespace-pre-wrap">
+                          {t.task_definition || "—"}
+                        </div>
+                      </td>
+                      <td>{t.meeting_type || "—"}</td>
+                      <td>{Number(t.hours || 0).toFixed(2)}</td>
+                      <td className="font-semibold">
+                        {formatCurrency(t.total_after_discount)}
+                      </td>
+                      <td>
+                        <StatusBadge status={t.status} />
+                      </td>
+                      <td>
+                        <div
+                          className="flex gap-1 justify-end"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <IconButton
+                            variant="edit"
+                            title="עריכה"
+                            onClick={() => startEdit(t)}
+                          >
+                            <EditIcon />
+                          </IconButton>
+                          <IconButton
+                            variant="delete"
+                            title="מחיקה"
+                            onClick={() => handleDelete(t.id)}
+                          >
+                            <DeleteIcon />
+                          </IconButton>
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={9} className="bg-surface-subtle p-0">
+                          <TaskDetails task={t} />
+                        </td>
+                      </tr>
                     )}
-                  </td>
-                  <td className="font-medium">
-                    {patientNameById[t.patient_id] || "—"}
-                  </td>
-                  <td className="max-w-xs">
-                    <div className="line-clamp-2 text-sm whitespace-pre-wrap">
-                      {t.task_definition || "—"}
-                    </div>
-                  </td>
-                  <td>{t.meeting_type}</td>
-                  <td>{Number(t.hours || 0).toFixed(2)}</td>
-                  <td>{t.attendance}</td>
-                  <td>₪{Number(t.travel_payment || 0).toFixed(2)}</td>
-                  <td>₪{Number(t.total_before_discount || 0).toFixed(2)}</td>
-                  <td>₪{Number(t.total_after_discount || 0).toFixed(2)}</td>
-                  <td>{t.status}</td>
-                  <td>
-                    <div className="flex gap-2 justify-end">
-                      <button
-                        className="btn-ghost text-xs px-3 py-1"
-                        onClick={() => startEdit(t)}
-                      >
-                        עריכה
-                      </button>
-                      <button
-                        className="btn-danger text-xs px-3 py-1"
-                        onClick={() => handleDelete(t.id)}
-                      >
-                        מחיקה
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
+                  </Fragment>
+                );
+              })
             )}
           </tbody>
         </table>

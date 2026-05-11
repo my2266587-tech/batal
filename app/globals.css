@@ -41,7 +41,7 @@ html, body {
     @apply card p-6;
   }
   .table-base {
-    @apply w-full text-right text-sm;
+    @apply w-full text-right text-sm tabular-nums;
   }
   .table-base thead th {
     @apply bg-surface-subtle text-ink-700 font-semibold px-4 py-3 border-b border-line whitespace-nowrap;
@@ -71,10 +71,10 @@ html, body {
     @apply text-sm text-ink-500;
   }
   .stat-value {
-    @apply text-3xl font-bold text-ink-900 mt-2 tracking-tight;
+    @apply text-3xl font-bold text-ink-900 mt-2 tracking-tight tabular-nums;
   }
   .stat-value-accent {
-    @apply text-3xl font-bold text-accent-600 mt-2 tracking-tight;
+    @apply text-3xl font-bold text-accent-600 mt-2 tracking-tight tabular-nums;
   }
   .badge {
     @apply inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium;

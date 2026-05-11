@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
+import { DeleteIcon, EditIcon, IconButton } from "@/components/Icons";
+import { formatCurrency } from "@/lib/format";
 
 const emptyForm = {
   date: "",
@@ -18,6 +20,7 @@ export default function CashPage() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
+  const [formOpen, setFormOpen] = useState(false);
 
   async function load() {
     if (!supabaseReady) {
@@ -48,6 +51,18 @@ export default function CashPage() {
     setEditingId(null);
   }
 
+  function openAddForm() {
+    resetForm();
+    setError("");
+    setFormOpen(true);
+  }
+
+  function closeForm() {
+    setFormOpen(false);
+    resetForm();
+    setError("");
+  }
+
   function startEdit(r) {
     setEditingId(r.id);
     setForm({
@@ -56,6 +71,7 @@ export default function CashPage() {
       purpose: r.purpose || "",
       notes: r.notes || "",
     });
+    setFormOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -81,7 +97,7 @@ export default function CashPage() {
     if (res.error) setError(res.error.message);
     setSaving(false);
     if (!res.error) {
-      resetForm();
+      closeForm();
       load();
     }
   }
@@ -117,11 +133,19 @@ export default function CashPage() {
           <h1 className="page-title">מעשר געלט</h1>
           <p className="page-subtitle">רישום הוצאות והכנסות.</p>
         </div>
-        <span className="text-sm text-ink-500">
-          סה״כ: ₪{total.toFixed(2)} ({records.length} רישומים)
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-ink-500">
+            סה״כ: {formatCurrency(total)} ({records.length} רישומים)
+          </span>
+          {!formOpen && (
+            <button type="button" className="btn-primary" onClick={openAddForm}>
+              + הוספת רישום
+            </button>
+          )}
+        </div>
       </header>
 
+      {formOpen && (
       <form onSubmit={handleSubmit} className="card p-6 space-y-5">
         <h2 className="section-title">
           {editingId ? "עריכת רישום" : "הוספת רישום"}
@@ -171,13 +195,12 @@ export default function CashPage() {
           <button type="submit" className="btn-primary" disabled={saving}>
             {saving ? "שומר..." : editingId ? "עדכן רישום" : "שמור רישום"}
           </button>
-          {editingId && (
-            <button type="button" className="btn-ghost" onClick={resetForm}>
-              ביטול
-            </button>
-          )}
+          <button type="button" className="btn-ghost" onClick={closeForm}>
+            ביטול
+          </button>
         </div>
       </form>
+      )}
 
       <div className="card overflow-x-auto">
         <table className="table-base">
@@ -211,23 +234,25 @@ export default function CashPage() {
                       ? new Date(r.date).toLocaleDateString("he-IL")
                       : ""}
                   </td>
-                  <td>₪{Number(r.amount || 0).toFixed(2)}</td>
+                  <td>{formatCurrency(r.amount)}</td>
                   <td>{r.purpose}</td>
                   <td className="max-w-md">{r.notes}</td>
                   <td>
-                    <div className="flex gap-2 justify-end">
-                      <button
-                        className="btn-ghost text-xs px-3 py-1"
+                    <div className="flex gap-1 justify-end">
+                      <IconButton
+                        variant="edit"
+                        title="עריכה"
                         onClick={() => startEdit(r)}
                       >
-                        עריכה
-                      </button>
-                      <button
-                        className="btn-danger text-xs px-3 py-1"
+                        <EditIcon />
+                      </IconButton>
+                      <IconButton
+                        variant="delete"
+                        title="מחיקה"
                         onClick={() => handleDelete(r.id)}
                       >
-                        מחיקה
-                      </button>
+                        <DeleteIcon />
+                      </IconButton>
                     </div>
                   </td>
                 </tr>

@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
+import { DeleteIcon, EditIcon, IconButton } from "@/components/Icons";
+import { formatCurrency } from "@/lib/format";
 
 const STATUSES = ["פעיל", "לא פעיל", "בהמתנה"];
 
@@ -30,6 +32,7 @@ export default function PatientsPage() {
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
 
   async function load() {
     if (!supabaseReady) {
@@ -66,12 +69,24 @@ export default function PatientsPage() {
       hourly_rate: p.hourly_rate ?? "",
       hourly_rate_discounted: p.hourly_rate_discounted ?? "",
     });
+    setFormOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function resetForm() {
     setForm(emptyForm);
     setEditingId(null);
+  }
+
+  function openAddForm() {
+    resetForm();
+    setFormOpen(true);
+  }
+
+  function closeForm() {
+    setFormOpen(false);
+    resetForm();
+    setError("");
   }
 
   async function handleSubmit(e) {
@@ -92,21 +107,26 @@ export default function PatientsPage() {
       hourly_rate: toNumOrNull(form.hourly_rate),
       hourly_rate_discounted: toNumOrNull(form.hourly_rate_discounted),
     };
+    let saveError = null;
     if (editingId) {
-      const { error } = await supabase
+      const { error: e } = await supabase
         .from("patients")
         .update(payload)
         .eq("id", editingId);
-      if (error) setError(error.message);
+      saveError = e;
     } else {
-      const { error } = await supabase.from("patients").insert([payload]);
-      if (error) setError(error.message);
+      const { error: e } = await supabase
+        .from("patients")
+        .insert([payload]);
+      saveError = e;
     }
     setSaving(false);
-    if (!error) {
-      resetForm();
-      load();
+    if (saveError) {
+      setError(saveError.message);
+      return;
     }
+    closeForm();
+    load();
   }
 
   async function handleDelete(id) {
@@ -132,9 +152,17 @@ export default function PatientsPage() {
           <h1 className="page-title">מטופלים</h1>
           <p className="page-subtitle">ניהול רשימת המטופלים ותעריפים.</p>
         </div>
-        <span className="text-sm text-ink-500">סה״כ: {patients.length}</span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-ink-500">סה״כ: {patients.length}</span>
+          {!formOpen && (
+            <button type="button" className="btn-primary" onClick={openAddForm}>
+              + הוספת מטופל
+            </button>
+          )}
+        </div>
       </header>
 
+      {formOpen && (
       <form onSubmit={handleSubmit} className="card p-6 space-y-5">
         <h2 className="section-title">
           {editingId ? "עריכת מטופל" : "הוספת מטופל"}
@@ -227,13 +255,12 @@ export default function PatientsPage() {
           <button type="submit" className="btn-primary" disabled={saving}>
             {saving ? "שומר..." : editingId ? "עדכן מטופל" : "שמור מטופל"}
           </button>
-          {editingId && (
-            <button type="button" className="btn-ghost" onClick={resetForm}>
-              ביטול
-            </button>
-          )}
+          <button type="button" className="btn-ghost" onClick={closeForm}>
+            ביטול
+          </button>
         </div>
       </form>
+      )}
 
       <div className="card overflow-x-auto">
         <table className="table-base">
@@ -274,12 +301,12 @@ export default function PatientsPage() {
                   <td>{p.treatment_type || "—"}</td>
                   <td>
                     {p.hourly_rate != null
-                      ? `₪${Number(p.hourly_rate).toFixed(2)}`
+                      ? formatCurrency(p.hourly_rate)
                       : "—"}
                   </td>
                   <td>
                     {p.hourly_rate_discounted != null
-                      ? `₪${Number(p.hourly_rate_discounted).toFixed(2)}`
+                      ? formatCurrency(p.hourly_rate_discounted)
                       : "—"}
                   </td>
                   <td className="max-w-xs truncate">{p.notes}</td>
@@ -289,19 +316,21 @@ export default function PatientsPage() {
                       : ""}
                   </td>
                   <td>
-                    <div className="flex gap-2 justify-end">
-                      <button
-                        className="btn-ghost text-xs px-3 py-1"
+                    <div className="flex gap-1 justify-end">
+                      <IconButton
+                        variant="edit"
+                        title="עריכה"
                         onClick={() => startEdit(p)}
                       >
-                        עריכה
-                      </button>
-                      <button
-                        className="btn-danger text-xs px-3 py-1"
+                        <EditIcon />
+                      </IconButton>
+                      <IconButton
+                        variant="delete"
+                        title="מחיקה"
                         onClick={() => handleDelete(p.id)}
                       >
-                        מחיקה
-                      </button>
+                        <DeleteIcon />
+                      </IconButton>
                     </div>
                   </td>
                 </tr>
