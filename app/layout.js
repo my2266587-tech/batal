@@ -1,5 +1,5 @@
 import "./globals.css";
-import Sidebar from "@/components/Sidebar";
+import AppShell from "@/components/AppShell";
 
 export const metadata = {
   title: "בט״ל — ניהול משימות",
@@ -22,10 +22,7 @@ export default function RootLayout({ children }) {
         />
       </head>
       <body className="bg-surface min-h-screen">
-        <Sidebar />
-        <main className="md:mr-64 px-5 md:px-10 py-6 md:py-10 min-h-screen">
-          <div className="max-w-6xl">{children}</div>
-        </main>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

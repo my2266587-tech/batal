@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { supabase, supabaseReady } from "@/lib/supabaseClient";
 
 const links = [
   { href: "/patients", label: "מטופלים" },
@@ -48,6 +49,55 @@ function Brand() {
   );
 }
 
+function UserFooter() {
+  const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!supabaseReady) return;
+    supabase.auth.getUser().then(({ data }) => {
+      setEmail(data?.user?.email || "");
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setEmail(session?.user?.email || "");
+    });
+    return () => sub?.subscription?.unsubscribe();
+  }, []);
+
+  async function signOut() {
+    setBusy(true);
+    await supabase.auth.signOut();
+    setBusy(false);
+    router.replace("/auth/signin");
+  }
+
+  if (!email) {
+    return (
+      <div className="px-6 py-4 border-t border-sidebar-border text-xs text-white/40">
+        © בט״ל
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-4 py-4 border-t border-sidebar-border space-y-2">
+      <div className="text-[11px] text-white/40 px-2">מחוברת כ:</div>
+      <div className="text-xs text-white/80 px-2 break-all leading-5">
+        {email}
+      </div>
+      <button
+        type="button"
+        onClick={signOut}
+        disabled={busy}
+        className="w-full rounded-md px-3 py-2 text-xs font-medium bg-white/5 text-white/80 hover:bg-white/10 hover:text-white transition-colors disabled:opacity-50"
+      >
+        {busy ? "מתנתק..." : "התנתקות"}
+      </button>
+    </div>
+  );
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -58,19 +108,15 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* Desktop: fixed sidebar pinned to the right */}
       <aside
         className="hidden md:flex md:flex-col md:fixed md:top-0 md:right-0 md:bottom-0 md:w-64
                    bg-sidebar text-white z-30"
       >
         <Brand />
         <NavList pathname={pathname} />
-        <div className="px-6 py-4 border-t border-sidebar-border text-xs text-white/40">
-          © בט״ל
-        </div>
+        <UserFooter />
       </aside>
 
-      {/* Mobile: top bar */}
       <header className="md:hidden sticky top-0 z-40 bg-sidebar text-white">
         <div className="px-4 py-3 flex items-center justify-between">
           <div>
@@ -88,21 +134,19 @@ export default function Sidebar() {
         </div>
       </header>
 
-      {/* Mobile: slide-in drawer */}
       {mobileOpen && (
         <div className="md:hidden fixed inset-0 z-50">
           <div
             className="absolute inset-0 bg-black/50"
             onClick={() => setMobileOpen(false)}
           />
-          <aside
-            className="absolute top-0 right-0 bottom-0 w-72 bg-sidebar text-white flex flex-col shadow-xl"
-          >
+          <aside className="absolute top-0 right-0 bottom-0 w-72 bg-sidebar text-white flex flex-col shadow-xl">
             <Brand />
             <NavList
               pathname={pathname}
               onNavigate={() => setMobileOpen(false)}
             />
+            <UserFooter />
           </aside>
         </div>
       )}
