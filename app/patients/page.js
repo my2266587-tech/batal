@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import { DeleteIcon, EditIcon, IconButton } from "@/components/Icons";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatDate } from "@/lib/format";
 
 const STATUSES = ["פעיל", "לא פעיל", "בהמתנה"];
 
@@ -36,6 +36,103 @@ export default function PatientsPage() {
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
+
+  // Document upload form state
+  const [docFormOpen, setDocFormOpen] = useState(false);
+  const [docPatientId, setDocPatientId] = useState("");
+  const [docType, setDocType] = useState("");
+  const [docFile, setDocFile] = useState(null);
+  const [docNotes, setDocNotes] = useState("");
+  const [docUploading, setDocUploading] = useState(false);
+
+  function openDocForm() {
+    setDocPatientId("");
+    setDocType("");
+    setDocFile(null);
+    setDocNotes("");
+    setFormOpen(false);
+    setDocFormOpen(true);
+  }
+
+  function closeDocForm() {
+    setDocFormOpen(false);
+    setDocPatientId("");
+    setDocType("");
+    setDocFile(null);
+    setDocNotes("");
+  }
+
+  async function handleDocSubmit(e) {
+    e.preventDefault();
+    if (!docPatientId) {
+      alert("יש לבחור מטופל");
+      return;
+    }
+    if (!docFile) {
+      alert("יש לבחור קובץ");
+      return;
+    }
+    setDocUploading(true);
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (!sessionData?.session) {
+      setDocUploading(false);
+      alert("אין סשן פעיל. נא להתחבר מחדש.");
+      return;
+    }
+
+    const safe = (s) =>
+      String(s || "file").replace(/[^a-zA-Z0-9א-ת._-]+/g, "_").slice(0, 80);
+    const path = `patient-docs/${docPatientId}/${Date.now()}_${safe(docFile.name)}`;
+
+    const { data: up, error: upErr } = await supabase.storage
+      .from("documents")
+      .upload(path, docFile, { upsert: false });
+
+    if (upErr) {
+      console.error("[doc upload] storage error:", upErr);
+      const detail =
+        upErr.message ||
+        upErr.error ||
+        JSON.stringify(upErr, Object.getOwnPropertyNames(upErr || {}));
+      setDocUploading(false);
+      alert("העלאת הקובץ נכשלה (Supabase Storage):\n\n" + detail);
+      return;
+    }
+
+    const { data: pub } = supabase.storage
+      .from("documents")
+      .getPublicUrl(up.path);
+    const file_url = pub?.publicUrl;
+
+    const { error: insErr } = await supabase
+      .from("patient_documents")
+      .insert([
+        {
+          patient_id: docPatientId,
+          doc_type: docType || null,
+          notes: docNotes || null,
+          file_url,
+        },
+      ]);
+
+    if (insErr) {
+      console.error("[doc upload] db insert error:", insErr);
+      const detail =
+        insErr.message ||
+        insErr.details ||
+        JSON.stringify(insErr, Object.getOwnPropertyNames(insErr || {}));
+      setDocUploading(false);
+      alert(
+        "שמירת המסמך ב-DB נכשלה (patient_documents):\n\n" + detail,
+      );
+      return;
+    }
+
+    setDocUploading(false);
+    closeDocForm();
+    alert("המסמך הועלה. הוא יופיע בכרטיס המטופל.");
+  }
 
   async function load() {
     if (!supabaseReady) {
@@ -170,13 +267,99 @@ export default function PatientsPage() {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-ink-500">סה״כ: {patients.length}</span>
-          {!formOpen && (
-            <button type="button" className="btn-primary" onClick={openAddForm}>
-              + הוספת מטופל
-            </button>
+          {!formOpen && !docFormOpen && (
+            <>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={openDocForm}
+              >
+                + הוספת מסמך
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={openAddForm}
+              >
+                + הוספת מטופל
+              </button>
+            </>
           )}
         </div>
       </header>
+
+      {docFormOpen && (
+        <form onSubmit={handleDocSubmit} className="card p-6 space-y-5">
+          <h2 className="section-title">העלאת מסמך</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div>
+              <label className="label">מטופל *</label>
+              <select
+                className="input"
+                value={docPatientId}
+                onChange={(e) => setDocPatientId(e.target.value)}
+                required
+              >
+                <option value="">— בחרי —</option>
+                {patients.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.full_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">סוג מסמך</label>
+              <input
+                className="input"
+                placeholder="לדוגמה: תעודה, דוח, אישור"
+                value={docType}
+                onChange={(e) => setDocType(e.target.value)}
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="label">קובץ *</label>
+              <input
+                type="file"
+                className="text-sm"
+                onChange={(e) => setDocFile(e.target.files?.[0] || null)}
+                required
+              />
+              {docFile && (
+                <p className="text-xs text-ink-500 mt-1">
+                  {docFile.name} ({Math.round(docFile.size / 1024)} KB)
+                </p>
+              )}
+            </div>
+            <div className="md:col-span-2">
+              <label className="label">הערות</label>
+              <textarea
+                className="input min-h-[80px]"
+                value={docNotes}
+                onChange={(e) => setDocNotes(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              type="submit"
+              className="btn-primary"
+              disabled={docUploading}
+            >
+              {docUploading ? "מעלה..." : "שמירת מסמך"}
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={closeDocForm}
+              disabled={docUploading}
+            >
+              ביטול
+            </button>
+          </div>
+        </form>
+      )}
 
       {formOpen && (
       <form onSubmit={handleSubmit} className="card p-6 space-y-5">
@@ -331,9 +514,7 @@ export default function PatientsPage() {
                   </td>
                   <td className="max-w-xs truncate">{p.notes}</td>
                   <td className="text-ink-500 whitespace-nowrap">
-                    {p.created_at
-                      ? new Date(p.created_at).toLocaleDateString("he-IL")
-                      : ""}
+                    {formatDate(p.created_at)}
                   </td>
                   <td onClick={(e) => e.stopPropagation()}>
                     <div className="flex gap-1 justify-end">

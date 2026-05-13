@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import { DeleteIcon, EditIcon, IconButton } from "@/components/Icons";
+import { formatDate } from "@/lib/format";
 
 const emptyForm = {
   email: "",
@@ -357,9 +358,7 @@ export default function SettingsPage() {
                     </td>
                     <td className="max-w-xs truncate">{u.notes}</td>
                     <td className="text-ink-500 whitespace-nowrap">
-                      {u.created_at
-                        ? new Date(u.created_at).toLocaleDateString("he-IL")
-                        : ""}
+                      {formatDate(u.created_at)}
                     </td>
                     <td>
                       <div className="flex gap-1 justify-end">

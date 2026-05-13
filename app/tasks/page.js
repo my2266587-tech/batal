@@ -10,7 +10,7 @@ import {
   EditIcon,
   IconButton,
 } from "@/components/Icons";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatDate } from "@/lib/format";
 
 const MEETING_TYPES = ["פרונטלית", "טלפונית", "וידאו", "ביקור בית", "אחר"];
 const STATUSES = ["פתוח", "בוצע", "בוטל"];
@@ -61,6 +61,44 @@ function calcHoursFromTimes(start, end) {
   let endMin = eh * 60 + em;
   if (endMin < startMin) endMin += 24 * 60; // overnight handling
   return (endMin - startMin) / 60;
+}
+
+function toHebrewDate(gregStr) {
+  if (!gregStr) return "";
+  const d = new Date(gregStr);
+  if (isNaN(d.getTime())) return "";
+  try {
+    return new Intl.DateTimeFormat("he-u-ca-hebrew", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }).format(d);
+  } catch {
+    return "";
+  }
+}
+
+function formatHoursFriendly(hoursNum) {
+  if (!Number.isFinite(hoursNum) || hoursNum <= 0) return "";
+  const totalMin = Math.round(hoursNum * 60);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  let phrase;
+  if (h === 0) {
+    phrase = `${m} דקות`;
+  } else if (m === 0) {
+    if (h === 1) phrase = "שעה אחת";
+    else if (h === 2) phrase = "שעתיים";
+    else phrase = `${h} שעות`;
+  } else {
+    let hp;
+    if (h === 1) hp = "שעה";
+    else if (h === 2) hp = "שעתיים";
+    else hp = `${h} שעות`;
+    phrase = `${hp} ו-${m} דקות`;
+  }
+  const numeric = parseFloat(hoursNum.toFixed(2)).toString();
+  return `${phrase} (${numeric} שעות)`;
 }
 
 function toNumber(v) {
@@ -119,16 +157,16 @@ function TaskDetails({ task }) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <DetailField
           label="תאריך לועזי"
-          value={
-            task.date_gregorian
-              ? new Date(task.date_gregorian).toLocaleDateString("he-IL")
-              : null
-          }
+          value={formatDate(task.date_gregorian)}
         />
         <DetailField label="תאריך עברי" value={task.date_hebrew} />
         <DetailField
-          label="משך שעות"
-          value={Number(task.hours || 0).toFixed(2)}
+          label="משך"
+          value={
+            Number(task.hours) > 0
+              ? formatHoursFriendly(Number(task.hours))
+              : "—"
+          }
         />
         <DetailField label="סוג פגישה" value={task.meeting_type} />
         <DetailField
@@ -215,6 +253,7 @@ export default function TasksPage() {
   const [editingId, setEditingId] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
+  const [hebrewManual, setHebrewManual] = useState(false);
 
   // filters
   const [filterPatient, setFilterPatient] = useState("");
@@ -234,6 +273,7 @@ export default function TasksPage() {
         .from("tasks")
         .select("*")
         .order("date_gregorian", { ascending: false, nullsFirst: false })
+        .order("start_time", { ascending: false, nullsFirst: false })
         .order("created_at", { ascending: false }),
       supabase
         .from("patients")
@@ -273,6 +313,11 @@ export default function TasksPage() {
     setForm((f) => {
       const next = { ...f, [field]: value };
 
+      // Auto-fill Hebrew date from gregorian (unless user edited it manually)
+      if (field === "date_gregorian" && !hebrewManual) {
+        next.date_hebrew = value ? toHebrewDate(value) : "";
+      }
+
       // Auto-calc hours when start_time / end_time change
       if (field === "start_time" || field === "end_time") {
         const calc = calcHoursFromTimes(
@@ -303,6 +348,9 @@ export default function TasksPage() {
 
       return next;
     });
+    if (field === "date_hebrew") {
+      setHebrewManual(true);
+    }
   }
 
   function resetForm() {
@@ -314,12 +362,14 @@ export default function TasksPage() {
     resetForm();
     setError("");
     setFormOpen(true);
+    setHebrewManual(false);
   }
 
   function closeForm() {
     setFormOpen(false);
     resetForm();
     setError("");
+    setHebrewManual(false);
   }
 
   function startEdit(t) {
@@ -350,6 +400,7 @@ export default function TasksPage() {
       reminder_offset_minutes: t.reminder_offset_minutes ?? "",
     });
     setFormOpen(true);
+    setHebrewManual(!!t.date_hebrew);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -564,9 +615,14 @@ export default function TasksPage() {
               value={form.hours}
               onChange={(e) => update("hours", e.target.value)}
             />
+            {form.hours && Number(form.hours) > 0 && (
+              <p className="text-xs text-ink-700 mt-1 font-medium">
+                משך: {formatHoursFriendly(Number(form.hours))}
+              </p>
+            )}
             {form.start_time && form.end_time && (
-              <p className="text-xs text-ink-500 mt-1">
-                מחושב אוטומטית; ניתן לדרוס ידנית.
+              <p className="text-[11px] text-ink-500 mt-0.5">
+                חושב מתוך שעת התחלה וסיום; ניתן לדרוס ידנית.
               </p>
             )}
             {selectedPatient && (
@@ -952,11 +1008,7 @@ export default function TasksPage() {
                         />
                       </td>
                       <td className="whitespace-nowrap">
-                        {t.date_gregorian
-                          ? new Date(t.date_gregorian).toLocaleDateString(
-                              "he-IL",
-                            )
-                          : ""}
+                        {formatDate(t.date_gregorian)}
                         {t.date_hebrew && (
                           <div className="text-xs text-ink-500">
                             {t.date_hebrew}

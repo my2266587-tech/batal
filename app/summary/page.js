@@ -21,6 +21,7 @@ export default function SummaryPage() {
           .from("tasks")
           .select("*")
           .order("date_gregorian", { ascending: false, nullsFirst: false })
+          .order("start_time", { ascending: false, nullsFirst: false })
           .order("created_at", { ascending: false }),
         supabase
           .from("patients")

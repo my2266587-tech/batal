@@ -5,8 +5,42 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
-import { DocumentIcon, EditIcon, IconButton } from "@/components/Icons";
-import { formatCurrency } from "@/lib/format";
+import { DeleteIcon, DocumentIcon, EditIcon, IconButton } from "@/components/Icons";
+import { formatCurrency, formatDate } from "@/lib/format";
+
+function sanitize(name) {
+  return String(name || "file")
+    .replace(/[^a-zA-Z0-9א-ת._-]+/g, "_")
+    .slice(0, 80);
+}
+
+function storagePathFromUrl(url) {
+  const m = String(url || "").match(
+    /\/storage\/v1\/object\/public\/documents\/(.+)$/,
+  );
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function describeError(err, label) {
+  if (!err) return "";
+  const parts = [];
+  if (err.message) parts.push(err.message);
+  if (err.error) parts.push(err.error);
+  if (err.statusCode) parts.push(`status ${err.statusCode}`);
+  if (err.code) parts.push(`code ${err.code}`);
+  if (err.details) parts.push(err.details);
+  if (err.hint) parts.push(`hint: ${err.hint}`);
+  const text = parts.length ? parts.join(" — ") : JSON.stringify(err);
+  return `${label}: ${text}`;
+}
+
+function fullDump(err) {
+  try {
+    return JSON.stringify(err, Object.getOwnPropertyNames(err || {}), 2);
+  } catch {
+    return String(err);
+  }
+}
 
 function PaymentBadge({ status }) {
   const map = {
@@ -43,33 +77,179 @@ export default function PatientCardPage() {
 
   const [patient, setPatient] = useState(null);
   const [tasks, setTasks] = useState([]);
+  const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // Upload form state
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadDocType, setUploadDocType] = useState("");
+  const [uploadNotes, setUploadNotes] = useState("");
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+
+  async function loadAll() {
+    setLoading(true);
+    const [pRes, tRes, dRes] = await Promise.all([
+      supabase.from("patients").select("*").eq("id", id).maybeSingle(),
+      supabase
+        .from("tasks")
+        .select("*")
+        .eq("patient_id", id)
+        .order("date_gregorian", { ascending: false, nullsFirst: false })
+        .order("start_time", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("patient_documents")
+        .select("*")
+        .eq("patient_id", id)
+        .order("uploaded_at", { ascending: false }),
+    ]);
+    if (pRes.error) setError(pRes.error.message);
+    if (tRes.error) setError(tRes.error.message);
+    if (dRes.error) setError(dRes.error.message);
+    setPatient(pRes.data || null);
+    setTasks(tRes.data || []);
+    setDocs(dRes.data || []);
+    setLoading(false);
+  }
 
   useEffect(() => {
     if (!supabaseReady || !id) {
       setLoading(false);
       return;
     }
-    async function load() {
-      setLoading(true);
-      const [pRes, tRes] = await Promise.all([
-        supabase.from("patients").select("*").eq("id", id).maybeSingle(),
-        supabase
-          .from("tasks")
-          .select("*")
-          .eq("patient_id", id)
-          .order("date_gregorian", { ascending: false, nullsFirst: false })
-          .order("created_at", { ascending: false }),
-      ]);
-      if (pRes.error) setError(pRes.error.message);
-      if (tRes.error) setError(tRes.error.message);
-      setPatient(pRes.data || null);
-      setTasks(tRes.data || []);
-      setLoading(false);
-    }
-    load();
+    loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  function resetUpload() {
+    setUploadDocType("");
+    setUploadNotes("");
+    setUploadFile(null);
+    setUploadError("");
+  }
+
+  async function handleUpload(e) {
+    e.preventDefault();
+    if (!uploadFile) {
+      setUploadError("יש לבחור קובץ");
+      alert("יש לבחור קובץ");
+      return;
+    }
+    setUploadError("");
+    setUploading(true);
+
+    // === STEP 1: session check ===
+    const { data: sessionData, error: sessErr } = await supabase.auth.getSession();
+    console.log("[upload step 1] session:", sessionData, "err:", sessErr);
+    if (sessErr || !sessionData?.session) {
+      const msg = "STEP 1 — אין סשן פעיל. " + describeError(sessErr, "שגיאה");
+      alert(msg + "\n\n" + fullDump(sessErr));
+      setUploadError(msg);
+      setUploading(false);
+      return;
+    }
+    const userEmail = sessionData.session.user?.email;
+    console.log("[upload step 1] user email:", userEmail);
+
+    // === STEP 2: authorization check (calls is_authorized RPC) ===
+    const { data: isAuth, error: authErr } = await supabase.rpc("is_authorized");
+    console.log("[upload step 2] is_authorized:", isAuth, "err:", authErr);
+    if (authErr) {
+      const msg =
+        "STEP 2 — הקריאה ל-is_authorized נכשלה. " +
+        describeError(authErr, "שגיאה");
+      alert(msg + "\n\n" + fullDump(authErr));
+      setUploadError(msg);
+      setUploading(false);
+      return;
+    }
+    if (!isAuth) {
+      const msg = `STEP 2 — המשתמש ${userEmail} אינו מורשה (is_authorized=false). ודאי שהוא ברשימה authorized_users עם is_active=true.`;
+      alert(msg);
+      setUploadError(msg);
+      setUploading(false);
+      return;
+    }
+
+    // === STEP 3: upload to Storage ===
+    const path = `patient-docs/${id}/${Date.now()}_${sanitize(uploadFile.name)}`;
+    console.log("[upload step 3] bucket=documents path=", path);
+    const { data: up, error: upErr } = await supabase.storage
+      .from("documents")
+      .upload(path, uploadFile, { upsert: false });
+    if (upErr) {
+      console.error("[upload step 3] storage error:", upErr);
+      console.error("[upload step 3] full dump:", fullDump(upErr));
+      const msg =
+        "STEP 3 — Storage נכשל. " +
+        describeError(upErr, "שגיאה מ-Supabase Storage");
+      alert(msg + "\n\n" + fullDump(upErr));
+      setUploadError(msg);
+      setUploading(false);
+      return;
+    }
+    console.log("[upload step 3] storage ok:", up);
+
+    // === STEP 4: getPublicUrl ===
+    const { data: pub } = supabase.storage
+      .from("documents")
+      .getPublicUrl(up.path);
+    const file_url = pub?.publicUrl;
+    console.log("[upload step 4] file_url:", file_url);
+
+    // === STEP 5: insert metadata row ===
+    const { error: insErr } = await supabase.from("patient_documents").insert([
+      {
+        patient_id: id,
+        doc_type: uploadDocType || null,
+        notes: uploadNotes || null,
+        file_url,
+      },
+    ]);
+    if (insErr) {
+      console.error("[upload step 5] db insert error:", insErr);
+      console.error("[upload step 5] full dump:", fullDump(insErr));
+      const msg =
+        "STEP 5 — insert ל-patient_documents נכשל. " +
+        describeError(insErr, "שגיאה מ-DB");
+      alert(msg + "\n\n" + fullDump(insErr));
+      setUploadError(msg);
+      setUploading(false);
+      return;
+    }
+    console.log("[upload step 5] db insert ok");
+    setUploading(false);
+    setUploadOpen(false);
+    resetUpload();
+    loadAll();
+  }
+
+  async function deleteDoc(doc) {
+    if (!confirm("למחוק את המסמך?")) return;
+    const path = storagePathFromUrl(doc.file_url);
+    if (path) {
+      const { error: rmErr } = await supabase.storage
+        .from("documents")
+        .remove([path]);
+      if (rmErr) {
+        console.warn("[delete] storage remove failed:", rmErr);
+        // continue with DB delete anyway
+      }
+    }
+    const { error } = await supabase
+      .from("patient_documents")
+      .delete()
+      .eq("id", doc.id);
+    if (error) {
+      console.error("[delete] db error:", error);
+      setError(describeError(error, "מחיקה נכשלה"));
+    } else {
+      loadAll();
+    }
+  }
 
   const totals = useMemo(() => {
     let hours = 0,
@@ -236,9 +416,7 @@ export default function PatientCardPage() {
                 tasks.map((t) => (
                   <tr key={t.id}>
                     <td className="whitespace-nowrap">
-                      {t.date_gregorian
-                        ? new Date(t.date_gregorian).toLocaleDateString("he-IL")
-                        : "—"}
+                      {formatDate(t.date_gregorian) || "—"}
                     </td>
                     <td className="max-w-xs">
                       <div className="line-clamp-2 text-sm whitespace-pre-wrap">
@@ -265,23 +443,137 @@ export default function PatientCardPage() {
       </section>
 
       <section className="card">
-        <div className="px-6 py-5 border-b border-line">
+        <div className="px-6 py-5 border-b border-line flex items-center justify-between">
           <h2 className="section-title">מסמכים</h2>
+          {!uploadOpen && (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => setUploadOpen(true)}
+            >
+              + העלאת מסמך
+            </button>
+          )}
         </div>
+
+        {uploadOpen && (
+          <form
+            onSubmit={handleUpload}
+            className="p-6 space-y-4 border-b border-line bg-surface-subtle"
+          >
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="label">סוג מסמך</label>
+                <input
+                  className="input"
+                  placeholder="לדוגמה: תעודה, דוח, אישור"
+                  value={uploadDocType}
+                  onChange={(e) => setUploadDocType(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="label">קובץ *</label>
+                <input
+                  type="file"
+                  className="text-sm"
+                  onChange={(e) =>
+                    setUploadFile(e.target.files?.[0] || null)
+                  }
+                  required
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="label">הערות</label>
+                <textarea
+                  className="input min-h-[70px]"
+                  value={uploadNotes}
+                  onChange={(e) => setUploadNotes(e.target.value)}
+                />
+              </div>
+            </div>
+            {uploadError && (
+              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 whitespace-pre-wrap break-words">
+                {uploadError}
+              </div>
+            )}
+            <div className="flex gap-3">
+              <button
+                type="submit"
+                className="btn-primary"
+                disabled={uploading}
+              >
+                {uploading ? "מעלה..." : "העלאה ושמירה"}
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => {
+                  setUploadOpen(false);
+                  resetUpload();
+                }}
+              >
+                ביטול
+              </button>
+            </div>
+          </form>
+        )}
+
         <div className="p-6">
-          {documents.length === 0 ? (
-            <p className="text-sm text-ink-500">אין מסמכים מצורפים.</p>
+          {docs.length === 0 && documents.length === 0 ? (
+            <p className="text-sm text-ink-500">
+              אין עדיין מסמכים — לחצי על "העלאת מסמך" כדי להוסיף את הראשון.
+            </p>
           ) : (
             <ul className="space-y-2">
-              {documents.map((t) => (
-                <li key={t.id} className="flex items-center gap-3 text-sm">
-                  <DocumentIcon className="w-4 h-4 text-ink-500" />
+              {docs.map((d) => (
+                <li
+                  key={d.id}
+                  className="flex items-center gap-3 text-sm border-b border-line last:border-0 pb-2"
+                >
+                  <DocumentIcon className="w-4 h-4 text-ink-500 flex-shrink-0" />
                   <span className="text-ink-500 whitespace-nowrap">
-                    {t.date_gregorian
-                      ? new Date(t.date_gregorian).toLocaleDateString("he-IL")
-                      : ""}
+                    {formatDate(d.uploaded_at)}
                   </span>
-                  <span className="line-clamp-1 flex-1">
+                  {d.doc_type && (
+                    <span className="badge-info">{d.doc_type}</span>
+                  )}
+                  <span className="flex-1 line-clamp-1 text-ink-700">
+                    {d.notes || "—"}
+                  </span>
+                  <a
+                    href={d.file_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-accent-700 hover:underline font-medium"
+                  >
+                    פתיחה
+                  </a>
+                  <IconButton
+                    variant="delete"
+                    title="מחיקה"
+                    onClick={() => deleteDoc(d)}
+                  >
+                    <DeleteIcon />
+                  </IconButton>
+                </li>
+              ))}
+
+              {documents.length > 0 && docs.length > 0 && (
+                <li className="pt-2 text-[11px] text-ink-500 uppercase tracking-wide">
+                  מסמכים מצורפים למשימות
+                </li>
+              )}
+              {documents.map((t) => (
+                <li
+                  key={`task-${t.id}`}
+                  className="flex items-center gap-3 text-sm border-b border-line last:border-0 pb-2"
+                >
+                  <DocumentIcon className="w-4 h-4 text-ink-500 flex-shrink-0" />
+                  <span className="text-ink-500 whitespace-nowrap">
+                    {formatDate(t.date_gregorian)}
+                  </span>
+                  <span className="badge-neutral">משימה</span>
+                  <span className="line-clamp-1 flex-1 text-ink-700">
                     {t.task_definition || "מסמך"}
                   </span>
                   <a

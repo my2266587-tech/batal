@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import { DeleteIcon, EditIcon, IconButton } from "@/components/Icons";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatDate } from "@/lib/format";
 
 const emptyForm = {
   date: "",
@@ -230,9 +230,7 @@ export default function CashPage() {
               records.map((r) => (
                 <tr key={r.id}>
                   <td className="whitespace-nowrap">
-                    {r.date
-                      ? new Date(r.date).toLocaleDateString("he-IL")
-                      : ""}
+                    {formatDate(r.date)}
                   </td>
                   <td>{formatCurrency(r.amount)}</td>
                   <td>{r.purpose}</td>
