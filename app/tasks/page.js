@@ -63,16 +63,68 @@ function calcHoursFromTimes(start, end) {
   return (endMin - startMin) / 60;
 }
 
+// Convert a number to Hebrew gematria letters (e.g. 22 -> "כב", 786 -> "תשפו").
+// For numbers >= 1000, the thousand is dropped (Hebrew years are millennium 6).
+function _hebrewLetters(n) {
+  if (n <= 0) return "";
+  const ONES = ["", "א", "ב", "ג", "ד", "ה", "ו", "ז", "ח", "ט"];
+  const TENS = ["", "י", "כ", "ל", "מ", "נ", "ס", "ע", "פ", "צ"];
+  const HUNDREDS = ["", "ק", "ר", "ש", "ת", "תק", "תר", "תש", "תת", "תתק"];
+
+  const num = n >= 1000 ? n % 1000 : n;
+  let out = "";
+  const h = Math.floor(num / 100);
+  const remaining = num % 100;
+  out += HUNDREDS[h] || "";
+
+  if (remaining === 15) {
+    out += "טו"; // avoid יה
+  } else if (remaining === 16) {
+    out += "טז"; // avoid יו
+  } else {
+    const t = Math.floor(remaining / 10);
+    const o = remaining % 10;
+    out += TENS[t] + ONES[o];
+  }
+  return out;
+}
+
+// Wrap letters with geresh (single letter) or gershayim (multi-letter).
+function formatHebrewGematria(n) {
+  const letters = _hebrewLetters(n);
+  if (!letters) return "";
+  if (letters.length === 1) return letters + "'";
+  return letters.slice(0, -1) + '"' + letters.slice(-1);
+}
+
 function toHebrewDate(gregStr) {
   if (!gregStr) return "";
   const d = new Date(gregStr);
   if (isNaN(d.getTime())) return "";
   try {
-    return new Intl.DateTimeFormat("he-u-ca-hebrew", {
+    // Force Latin numerals so we can parse day/year as integers.
+    const parts = new Intl.DateTimeFormat("he-u-ca-hebrew-nu-latn", {
       day: "numeric",
       month: "long",
       year: "numeric",
-    }).format(d);
+    }).formatToParts(d);
+
+    let day = 0;
+    let month = "";
+    let year = 0;
+    for (const p of parts) {
+      if (p.type === "day") day = parseInt(p.value, 10);
+      else if (p.type === "month") {
+        let m = p.value;
+        // Some Intl implementations prefix the month with "ב" (e.g., "באייר").
+        if (m.startsWith("ב") && m.length > 2) m = m.slice(1);
+        month = m;
+      } else if (p.type === "year") year = parseInt(p.value, 10);
+    }
+
+    if (!day || !month || !year) return "";
+
+    return `${formatHebrewGematria(day)} ${month} ${formatHebrewGematria(year)}`;
   } catch {
     return "";
   }
