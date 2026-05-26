@@ -660,10 +660,10 @@ export default function TasksPage() {
             <label className="label">משך שעות</label>
             <input
               type="number"
-              step="0.25"
+              step="0.01"
               min="0"
               className="input"
-              placeholder="לדוגמה: 1.5"
+              placeholder="לדוגמה: 1.5 או 0.33"
               value={form.hours}
               onChange={(e) => update("hours", e.target.value)}
             />
