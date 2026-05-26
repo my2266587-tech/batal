@@ -70,6 +70,107 @@ function Field({ label, value }) {
   );
 }
 
+function TasksSection({
+  title,
+  subtitle,
+  items,
+  emptyText,
+  onTogglePaid,
+  accent,
+}) {
+  const PAID_VALUES = ["שולם", "לא לחיוב"];
+  const sectionTotal = items.reduce(
+    (s, t) => s + (Number(t.total_after_discount) || 0),
+    0,
+  );
+
+  return (
+    <section className="card">
+      <div
+        className={
+          "px-6 py-5 border-b border-line flex items-center justify-between " +
+          (accent === "open" ? "bg-red-50/40" : "bg-emerald-50/40")
+        }
+      >
+        <div>
+          <h2 className="section-title">
+            {title} ({items.length})
+          </h2>
+          <p className="text-xs text-ink-500 mt-1">{subtitle}</p>
+        </div>
+        <div className="text-left">
+          <div className="text-xs text-ink-500">סה״כ</div>
+          <div
+            className={
+              "text-lg font-bold tabular-nums " +
+              (accent === "open" ? "text-red-700" : "text-emerald-700")
+            }
+          >
+            {formatCurrency(sectionTotal)}
+          </div>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="table-base">
+          <thead>
+            <tr>
+              <th className="w-16 text-center">שולם?</th>
+              <th>תאריך</th>
+              <th>משימה</th>
+              <th>סוג</th>
+              <th>שעות</th>
+              <th>תשלום</th>
+              <th>סטטוס</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="text-center text-ink-500 py-8">
+                  {emptyText}
+                </td>
+              </tr>
+            ) : (
+              items.map((t) => {
+                const checked = PAID_VALUES.includes(t.payment_status);
+                return (
+                  <tr key={t.id}>
+                    <td className="text-center">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => onTogglePaid(t)}
+                        title={checked ? "סמן כלא שולם" : "סמן כשולם"}
+                        className="w-4 h-4 accent-accent-600 cursor-pointer"
+                      />
+                    </td>
+                    <td className="whitespace-nowrap">
+                      {formatDate(t.date_gregorian) || "—"}
+                    </td>
+                    <td className="max-w-xs">
+                      <div className="line-clamp-2 text-sm whitespace-pre-wrap">
+                        {t.task_definition || "—"}
+                      </div>
+                    </td>
+                    <td>{t.meeting_type || "—"}</td>
+                    <td>{Number(t.hours || 0).toFixed(2)}</td>
+                    <td className="font-medium">
+                      {formatCurrency(t.total_after_discount)}
+                    </td>
+                    <td>
+                      <PaymentBadge status={t.payment_status} />
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export default function PatientCardPage() {
   const params = useParams();
   const router = useRouter();
@@ -251,6 +352,19 @@ export default function PatientCardPage() {
     }
   }
 
+  // Statuses that count as open debt (top section) vs settled (bottom section)
+  const UNPAID_STATUSES = ["לא שולם", "שולם חלקית"];
+  const isUnpaidStatus = (s) => UNPAID_STATUSES.includes(s || "לא שולם");
+
+  const unpaidTasks = useMemo(
+    () => tasks.filter((t) => isUnpaidStatus(t.payment_status)),
+    [tasks],
+  );
+  const paidTasks = useMemo(
+    () => tasks.filter((t) => !isUnpaidStatus(t.payment_status)),
+    [tasks],
+  );
+
   const totals = useMemo(() => {
     let hours = 0,
       before = 0,
@@ -263,9 +377,9 @@ export default function PatientCardPage() {
       before += Number(t.total_before_discount) || 0;
       after += Number(t.total_after_discount) || 0;
       travel += Number(t.travel_payment) || 0;
-      if (t.payment_status === "שולם") paid += Number(t.total_after_discount) || 0;
-      else if (t.payment_status === "לא שולם" || t.payment_status === "שולם חלקית")
+      if (isUnpaidStatus(t.payment_status))
         unpaid += Number(t.total_after_discount) || 0;
+      else paid += Number(t.total_after_discount) || 0;
     });
     return { hours, before, after, travel, paid, unpaid };
   }, [tasks]);
@@ -274,6 +388,24 @@ export default function PatientCardPage() {
     () => tasks.filter((t) => t.documents_url && t.documents_url.trim() !== ""),
     [tasks],
   );
+
+  async function togglePaymentStatus(task) {
+    const currentlyUnpaid = isUnpaidStatus(task.payment_status);
+    const newStatus = currentlyUnpaid ? "שולם" : "לא שולם";
+    const { error: updErr } = await supabase
+      .from("tasks")
+      .update({ payment_status: newStatus })
+      .eq("id", task.id);
+    if (updErr) {
+      console.error("[toggle paid] error:", updErr);
+      alert(
+        "עדכון סטטוס תשלום נכשל:\n\n" +
+          (updErr.message || JSON.stringify(updErr)),
+      );
+      return;
+    }
+    loadAll();
+  }
 
   if (!supabaseReady) {
     return (
@@ -388,59 +520,23 @@ export default function PatientCardPage() {
         </div>
       </section>
 
-      <section className="card">
-        <div className="px-6 py-5 border-b border-line">
-          <h2 className="section-title">משימות ופגישות</h2>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="table-base">
-            <thead>
-              <tr>
-                <th>תאריך</th>
-                <th>משימה</th>
-                <th>סוג</th>
-                <th>שעות</th>
-                <th>תשלום</th>
-                <th>תשלום</th>
-                <th>פגישה</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tasks.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="text-center text-ink-500 py-8">
-                    אין משימות למטופל זה
-                  </td>
-                </tr>
-              ) : (
-                tasks.map((t) => (
-                  <tr key={t.id}>
-                    <td className="whitespace-nowrap">
-                      {formatDate(t.date_gregorian) || "—"}
-                    </td>
-                    <td className="max-w-xs">
-                      <div className="line-clamp-2 text-sm whitespace-pre-wrap">
-                        {t.task_definition || "—"}
-                      </div>
-                    </td>
-                    <td>{t.meeting_type || "—"}</td>
-                    <td>{Number(t.hours || 0).toFixed(2)}</td>
-                    <td className="font-medium">
-                      {formatCurrency(t.total_after_discount)}
-                    </td>
-                    <td>
-                      <PaymentBadge status={t.payment_status} />
-                    </td>
-                    <td>
-                      <MeetingBadge status={t.status} />
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <TasksSection
+        title="משימות לא שולמו"
+        subtitle="חוב פתוח לתשלום"
+        items={unpaidTasks}
+        emptyText="אין משימות לא שולמו"
+        onTogglePaid={togglePaymentStatus}
+        accent="open"
+      />
+
+      <TasksSection
+        title="משימות ששולמו"
+        subtitle="לא נכנסות לחישוב החוב הפתוח"
+        items={paidTasks}
+        emptyText="אין משימות ששולמו עדיין"
+        onTogglePaid={togglePaymentStatus}
+        accent="done"
+      />
 
       <section className="card">
         <div className="px-6 py-5 border-b border-line flex items-center justify-between">
