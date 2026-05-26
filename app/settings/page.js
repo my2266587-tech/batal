@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import { DeleteIcon, EditIcon, IconButton } from "@/components/Icons";
@@ -23,6 +23,17 @@ export default function SettingsPage() {
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+
+  const filteredUsers = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter((u) =>
+      [u.email, u.role, u.notes].some((v) =>
+        String(v || "").toLowerCase().includes(q),
+      ),
+    );
+  }, [users, searchTerm]);
 
   useEffect(() => {
     if (!supabaseReady) {
@@ -197,7 +208,14 @@ export default function SettingsPage() {
           <h1 className="page-title">הגדרות</h1>
           <p className="page-subtitle">ניהול משתמשים מורשים במערכת.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <input
+            type="search"
+            placeholder="חיפוש..."
+            className="input md:max-w-xs"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
           <span className="text-sm text-ink-500">סה״כ: {users.length}</span>
           {!formOpen && (
             <button
@@ -307,14 +325,14 @@ export default function SettingsPage() {
                   טוען...
                 </td>
               </tr>
-            ) : users.length === 0 ? (
+            ) : filteredUsers.length === 0 ? (
               <tr>
                 <td colSpan={6} className="text-center text-ink-500 py-6">
-                  אין משתמשים מורשים
+                  {searchTerm ? "אין תוצאות לחיפוש" : "אין משתמשים מורשים"}
                 </td>
               </tr>
             ) : (
-              users.map((u) => {
+              filteredUsers.map((u) => {
                 const isMe = u.email === currentEmail;
                 return (
                   <tr key={u.id} className={isMe ? "bg-accent-50/40" : ""}>

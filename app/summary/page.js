@@ -9,6 +9,7 @@ export default function SummaryPage() {
   const [tasks, setTasks] = useState([]);
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => {
     async function load() {
@@ -92,6 +93,14 @@ export default function SummaryPage() {
     return Array.from(map.values()).sort((a, b) => b.after - a.after);
   }, [tasks, patientNameById]);
 
+  const filteredByPatient = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return byPatient;
+    return byPatient.filter((r) =>
+      String(r.name || "").toLowerCase().includes(q),
+    );
+  }, [byPatient, searchTerm]);
+
   if (!supabaseReady) {
     return (
       <div className="space-y-6">
@@ -134,11 +143,22 @@ export default function SummaryPage() {
       </section>
 
       <div className="card">
-        <div className="px-6 py-5 border-b border-line flex items-center justify-between">
+        <div className="px-6 py-5 border-b border-line flex flex-wrap items-center justify-between gap-3">
           <h2 className="section-title">סיכום לפי מטופל</h2>
-          <span className="text-xs text-ink-500">
-            {byPatient.length} מטופלים
-          </span>
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              type="search"
+              placeholder="חיפוש לפי שם מטופל..."
+              className="input md:max-w-xs"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            <span className="text-xs text-ink-500">
+              {searchTerm
+                ? `${filteredByPatient.length}/${byPatient.length}`
+                : `${byPatient.length} מטופלים`}
+            </span>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="table-base">
@@ -159,14 +179,14 @@ export default function SummaryPage() {
                     טוען...
                   </td>
                 </tr>
-              ) : byPatient.length === 0 ? (
+              ) : filteredByPatient.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="text-center text-ink-500 py-8">
-                    אין נתונים להצגה
+                    {searchTerm ? "אין תוצאות לחיפוש" : "אין נתונים להצגה"}
                   </td>
                 </tr>
               ) : (
-                byPatient.map((row) => (
+                filteredByPatient.map((row) => (
                   <tr key={row.id || "unknown"}>
                     <td className="font-medium">{row.name}</td>
                     <td>{row.count}</td>

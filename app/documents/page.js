@@ -47,6 +47,7 @@ export default function DocumentsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filterPatient, setFilterPatient] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
 
   // Upload form
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -99,21 +100,41 @@ export default function DocumentsPage() {
     return m;
   }, [patients]);
 
-  const filteredDocs = useMemo(
-    () =>
-      docs.filter(
-        (d) => !filterPatient || d.patient_id === filterPatient,
-      ),
-    [docs, filterPatient],
-  );
+  const filteredDocs = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    return docs.filter((d) => {
+      if (filterPatient && d.patient_id !== filterPatient) return false;
+      if (q) {
+        const hay = [
+          patientNameById[d.patient_id],
+          d.doc_type,
+          d.notes,
+        ]
+          .map((v) => String(v || "").toLowerCase())
+          .join(" ");
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [docs, filterPatient, searchTerm, patientNameById]);
 
-  const filteredTaskDocs = useMemo(
-    () =>
-      taskDocs.filter(
-        (t) => !filterPatient || t.patient_id === filterPatient,
-      ),
-    [taskDocs, filterPatient],
-  );
+  const filteredTaskDocs = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    return taskDocs.filter((t) => {
+      if (filterPatient && t.patient_id !== filterPatient) return false;
+      if (q) {
+        const hay = [
+          patientNameById[t.patient_id],
+          t.task_definition,
+          t.meeting_type,
+        ]
+          .map((v) => String(v || "").toLowerCase())
+          .join(" ");
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [taskDocs, filterPatient, searchTerm, patientNameById]);
 
   function resetUpload() {
     setUPatientId("");
@@ -354,20 +375,29 @@ export default function DocumentsPage() {
         </form>
       )}
 
-      <div className="card p-5">
-        <label className="label">סינון לפי מטופל</label>
-        <select
-          className="input md:max-w-md"
-          value={filterPatient}
-          onChange={(e) => setFilterPatient(e.target.value)}
-        >
-          <option value="">כל המטופלים</option>
-          {patients.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.full_name}
-            </option>
-          ))}
-        </select>
+      <div className="card p-5 space-y-4">
+        <input
+          type="search"
+          placeholder="חיפוש (סוג מסמך, הערות, שם מטופל)..."
+          className="input"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
+        <div>
+          <label className="label">סינון לפי מטופל</label>
+          <select
+            className="input md:max-w-md"
+            value={filterPatient}
+            onChange={(e) => setFilterPatient(e.target.value)}
+          >
+            <option value="">כל המטופלים</option>
+            {patients.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.full_name}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div className="card overflow-x-auto">

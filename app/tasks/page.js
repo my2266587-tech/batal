@@ -314,6 +314,7 @@ export default function TasksPage() {
   const [filterStatus, setFilterStatus] = useState("");
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
 
   async function load() {
     if (!supabaseReady) {
@@ -573,6 +574,7 @@ export default function TasksPage() {
   );
 
   const filtered = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
     return tasks.filter((t) => {
       if (filterPatient && t.patient_id !== filterPatient) return false;
       if (filterMeetingType && t.meeting_type !== filterMeetingType)
@@ -582,9 +584,30 @@ export default function TasksPage() {
         return false;
       if (filterDateTo && (!t.date_gregorian || t.date_gregorian > filterDateTo))
         return false;
+      if (q) {
+        const patientName = patientNameById[t.patient_id] || "";
+        const hay = [
+          patientName,
+          t.task_definition,
+          t.meeting_type,
+          t.meeting_details,
+          t.call_details,
+          t.email_details,
+          t.other_details,
+          t.attendance,
+          t.travel,
+          t.status,
+          t.payment_status,
+          t.date_hebrew,
+          t.rate_label,
+        ]
+          .map((v) => String(v || "").toLowerCase())
+          .join(" ");
+        if (!hay.includes(q)) return false;
+      }
       return true;
     });
-  }, [tasks, filterPatient, filterMeetingType, filterStatus, filterDateFrom, filterDateTo]);
+  }, [tasks, filterPatient, filterMeetingType, filterStatus, filterDateFrom, filterDateTo, searchTerm, patientNameById]);
 
   const totals = useMemo(() => {
     let hours = 0,
@@ -983,7 +1006,14 @@ export default function TasksPage() {
       )}
 
       <div className="card p-5 space-y-4">
-        <h2 className="section-title">סינון</h2>
+        <h2 className="section-title">סינון וחיפוש</h2>
+        <input
+          type="search"
+          placeholder="חיפוש חופשי בכל השדות (שם מטופל, הגדרת משימה, פירוט, סטטוס...)"
+          className="input"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div>
             <label className="label">מטופל</label>

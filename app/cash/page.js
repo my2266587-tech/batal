@@ -21,6 +21,17 @@ export default function CashPage() {
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+
+  const filteredRecords = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return records;
+    return records.filter((r) =>
+      [r.purpose, r.notes, String(r.amount || ""), r.date].some((v) =>
+        String(v || "").toLowerCase().includes(q),
+      ),
+    );
+  }, [records, searchTerm]);
 
   async function load() {
     if (!supabaseReady) {
@@ -133,7 +144,14 @@ export default function CashPage() {
           <h1 className="page-title">מעשר געלט</h1>
           <p className="page-subtitle">רישום הוצאות והכנסות.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <input
+            type="search"
+            placeholder="חיפוש..."
+            className="input md:max-w-xs"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
           <span className="text-sm text-ink-500">
             סה״כ: {formatCurrency(total)} ({records.length} רישומים)
           </span>
@@ -220,14 +238,14 @@ export default function CashPage() {
                   טוען...
                 </td>
               </tr>
-            ) : records.length === 0 ? (
+            ) : filteredRecords.length === 0 ? (
               <tr>
                 <td colSpan={5} className="text-center text-ink-500 py-6">
-                  אין רישומים
+                  {searchTerm ? "אין תוצאות לחיפוש" : "אין רישומים"}
                 </td>
               </tr>
             ) : (
-              records.map((r) => (
+              filteredRecords.map((r) => (
                 <tr key={r.id}>
                   <td className="whitespace-nowrap">
                     {formatDate(r.date)}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
@@ -37,6 +37,22 @@ export default function PatientsPage() {
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+
+  const filteredPatients = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return patients;
+    return patients.filter((p) =>
+      [
+        p.full_name,
+        p.phone,
+        p.email,
+        p.status,
+        p.treatment_type,
+        p.notes,
+      ].some((v) => String(v || "").toLowerCase().includes(q)),
+    );
+  }, [patients, searchTerm]);
 
   // Document upload form state
   const [docFormOpen, setDocFormOpen] = useState(false);
@@ -298,8 +314,19 @@ export default function PatientsPage() {
           <h1 className="page-title">מטופלים</h1>
           <p className="page-subtitle">ניהול רשימת המטופלים ותעריפים.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-ink-500">סה״כ: {patients.length}</span>
+        <div className="flex items-center gap-3 flex-wrap">
+          <input
+            type="search"
+            placeholder="חיפוש..."
+            className="input md:max-w-xs"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+          <span className="text-sm text-ink-500">
+            {searchTerm
+              ? `${filteredPatients.length}/${patients.length}`
+              : `סה״כ: ${patients.length}`}
+          </span>
           {!formOpen && !docFormOpen && (
             <>
               <button
@@ -582,14 +609,14 @@ export default function PatientsPage() {
                   טוען...
                 </td>
               </tr>
-            ) : patients.length === 0 ? (
+            ) : filteredPatients.length === 0 ? (
               <tr>
                 <td colSpan={10} className="text-center text-ink-500 py-6">
-                  אין מטופלים עדיין
+                  {searchTerm ? "אין תוצאות לחיפוש" : "אין מטופלים עדיין"}
                 </td>
               </tr>
             ) : (
-              patients.map((p) => (
+              filteredPatients.map((p) => (
                 <tr
                   key={p.id}
                   onClick={() => router.push(`/patients/${p.id}`)}
