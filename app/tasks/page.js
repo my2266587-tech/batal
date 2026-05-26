@@ -47,6 +47,7 @@ const emptyForm = {
   is_future: false,
   send_reminder: false,
   reminder_offset_minutes: "",
+  rate_label: "", // empty = default rate
 };
 
 function calcHoursFromTimes(start, end) {
@@ -330,7 +331,7 @@ export default function TasksPage() {
       supabase
         .from("patients")
         .select(
-          "id, full_name, status, treatment_type, hourly_rate, hourly_rate_discounted",
+          "id, full_name, status, treatment_type, hourly_rate, hourly_rate_discounted, extra_rates",
         )
         .order("full_name"),
     ]);
@@ -345,19 +346,38 @@ export default function TasksPage() {
     load();
   }, []);
 
-  function computeTotals(patientId, hoursVal) {
+  function getRateForPatient(patient, rateLabel) {
+    if (!patient) return null;
+    // Picked an explicit extra rate by label?
+    if (rateLabel && rateLabel !== "__default__") {
+      const found = (patient.extra_rates || []).find(
+        (r) => String(r.label) === String(rateLabel),
+      );
+      if (found && Number.isFinite(Number(found.rate))) {
+        const r = Number(found.rate);
+        return { before: r, after: r }; // extra rates have no separate discount
+      }
+    }
+    // Default: patient's hourly_rate (+ optional discount)
+    const rate = Number(patient.hourly_rate);
+    if (!Number.isFinite(rate)) return null;
+    const rateDisc =
+      patient.hourly_rate_discounted != null &&
+      patient.hourly_rate_discounted !== ""
+        ? Number(patient.hourly_rate_discounted)
+        : rate;
+    return { before: rate, after: Number.isFinite(rateDisc) ? rateDisc : rate };
+  }
+
+  function computeTotals(patientId, hoursVal, rateLabel) {
     const p = patients.find((x) => x.id === patientId);
     const h = Number(hoursVal);
     if (!p || !Number.isFinite(h)) return null;
-    const rate = Number(p.hourly_rate);
-    if (!Number.isFinite(rate)) return null;
-    const rateDisc =
-      p.hourly_rate_discounted != null && p.hourly_rate_discounted !== ""
-        ? Number(p.hourly_rate_discounted)
-        : rate;
+    const r = getRateForPatient(p, rateLabel);
+    if (!r) return null;
     return {
-      before: (h * rate).toFixed(2),
-      after: (h * (Number.isFinite(rateDisc) ? rateDisc : rate)).toFixed(2),
+      before: (h * r.before).toFixed(2),
+      after: (h * r.after).toFixed(2),
     };
   }
 
@@ -381,16 +401,23 @@ export default function TasksPage() {
         }
       }
 
-      // Recompute totals when patient_id / hours / time changes
+      // When switching patient — reset rate_label to default
+      if (field === "patient_id") {
+        next.rate_label = "";
+      }
+
+      // Recompute totals when patient_id / hours / time / rate changes
       if (
         field === "patient_id" ||
         field === "hours" ||
         field === "start_time" ||
-        field === "end_time"
+        field === "end_time" ||
+        field === "rate_label"
       ) {
         const totals = computeTotals(
           field === "patient_id" ? value : next.patient_id,
           field === "hours" ? value : next.hours,
+          field === "rate_label" ? value : next.rate_label,
         );
         if (totals) {
           next.total_before_discount = totals.before;
@@ -450,6 +477,7 @@ export default function TasksPage() {
       is_future: !!t.is_future,
       send_reminder: !!t.send_reminder,
       reminder_offset_minutes: t.reminder_offset_minutes ?? "",
+      rate_label: t.rate_label || "",
     });
     setFormOpen(true);
     setHebrewManual(!!t.date_hebrew);
@@ -504,6 +532,7 @@ export default function TasksPage() {
         form.reminder_offset_minutes === ""
           ? null
           : Number(form.reminder_offset_minutes),
+      rate_label: form.rate_label || null,
     };
 
     let res;
@@ -707,6 +736,32 @@ export default function TasksPage() {
                 </option>
               ))}
             </select>
+          </div>
+          <div>
+            <label className="label">סוג חיוב</label>
+            <select
+              className="input"
+              value={form.rate_label}
+              onChange={(e) => update("rate_label", e.target.value)}
+              disabled={!selectedPatient}
+            >
+              <option value="">
+                {selectedPatient
+                  ? `ברירת מחדל${selectedPatient.hourly_rate != null ? ` (${formatCurrency(selectedPatient.hourly_rate)})` : ""}`
+                  : "— בחרי מטופל קודם —"}
+              </option>
+              {(selectedPatient?.extra_rates || []).map((r, i) => (
+                <option key={i} value={r.label}>
+                  {r.label} ({formatCurrency(r.rate)})
+                </option>
+              ))}
+            </select>
+            {selectedPatient &&
+              (selectedPatient.extra_rates || []).length === 0 && (
+                <p className="text-[11px] text-ink-500 mt-1">
+                  אין תעריפים נוספים — ניתן להוסיף בכרטיס המטופל.
+                </p>
+              )}
           </div>
           <div>
             <label className="label">נוכחות</label>

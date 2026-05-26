@@ -493,6 +493,28 @@ export default function PatientCardPage() {
                 : null
             }
           />
+          {Array.isArray(patient.extra_rates) &&
+            patient.extra_rates.length > 0 && (
+              <div className="md:col-span-4">
+                <div className="text-xs text-ink-500 mb-1.5">
+                  תעריפים נוספים
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {patient.extra_rates.map((r, i) => (
+                    <span
+                      key={i}
+                      className="inline-flex items-center gap-2 bg-surface-subtle border border-line rounded-md px-3 py-1.5 text-sm"
+                    >
+                      <span className="font-medium text-ink-900">{r.label}</span>
+                      <span className="text-ink-500">·</span>
+                      <span className="font-semibold text-accent-700">
+                        {formatCurrency(r.rate)}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           {patient.notes && (
             <div className="md:col-span-4">
               <Field label="הערות" value={patient.notes} />

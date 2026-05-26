@@ -18,6 +18,7 @@ const emptyForm = {
   treatment_type: "",
   hourly_rate: "",
   hourly_rate_discounted: "",
+  extra_rates: [], // [{label, rate}]
 };
 
 function toNumOrNull(v) {
@@ -181,9 +182,33 @@ export default function PatientsPage() {
       treatment_type: p.treatment_type || "",
       hourly_rate: p.hourly_rate ?? "",
       hourly_rate_discounted: p.hourly_rate_discounted ?? "",
+      extra_rates: Array.isArray(p.extra_rates) ? p.extra_rates : [],
     });
     setFormOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function addExtraRate() {
+    setForm((f) => ({
+      ...f,
+      extra_rates: [...(f.extra_rates || []), { label: "", rate: "" }],
+    }));
+  }
+
+  function updateExtraRate(idx, field, value) {
+    setForm((f) => ({
+      ...f,
+      extra_rates: f.extra_rates.map((r, i) =>
+        i === idx ? { ...r, [field]: value } : r,
+      ),
+    }));
+  }
+
+  function removeExtraRate(idx) {
+    setForm((f) => ({
+      ...f,
+      extra_rates: f.extra_rates.filter((_, i) => i !== idx),
+    }));
   }
 
   function resetForm() {
@@ -210,6 +235,13 @@ export default function PatientsPage() {
     }
     setError("");
     setSaving(true);
+    const cleanExtraRates = (form.extra_rates || [])
+      .map((r) => ({
+        label: String(r.label || "").trim(),
+        rate: toNumOrNull(r.rate),
+      }))
+      .filter((r) => r.label && r.rate !== null && r.rate > 0);
+
     const payload = {
       full_name: form.full_name,
       phone: form.phone || null,
@@ -219,6 +251,7 @@ export default function PatientsPage() {
       treatment_type: form.treatment_type || null,
       hourly_rate: toNumOrNull(form.hourly_rate),
       hourly_rate_discounted: toNumOrNull(form.hourly_rate_discounted),
+      extra_rates: cleanExtraRates,
     };
     let saveError = null;
     if (editingId) {
@@ -438,6 +471,71 @@ export default function PatientsPage() {
               onChange={(e) => update("hourly_rate_discounted", e.target.value)}
             />
           </div>
+
+          <div className="md:col-span-2 border-t border-line pt-5">
+            <div className="flex items-center justify-between mb-3">
+              <label className="label mb-0">תעריפים נוספים</label>
+              <button
+                type="button"
+                onClick={addExtraRate}
+                className="text-sm text-accent-700 hover:bg-accent-50 px-3 py-1 rounded-md"
+              >
+                + הוספת תעריף
+              </button>
+            </div>
+            {(form.extra_rates || []).length === 0 ? (
+              <p className="text-xs text-ink-500">
+                ניתן להוסיף סוגי חיוב נוספים (למשל "פרונטלית 300 ₪", "ליווי 180 ₪") שיופיעו כבחירה בעת יצירת משימה.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {form.extra_rates.map((r, idx) => (
+                  <div
+                    key={idx}
+                    className="flex flex-wrap items-end gap-2 bg-surface-subtle border border-line rounded-md p-3"
+                  >
+                    <div className="flex-1 min-w-[150px]">
+                      <label className="text-xs text-ink-500 block mb-1">
+                        תיאור / שם התעריף
+                      </label>
+                      <input
+                        className="input"
+                        placeholder="פגישה פרונטלית / ליווי / וכו'"
+                        value={r.label}
+                        onChange={(e) =>
+                          updateExtraRate(idx, "label", e.target.value)
+                        }
+                      />
+                    </div>
+                    <div className="w-32">
+                      <label className="text-xs text-ink-500 block mb-1">
+                        מחיר לשעה (₪)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        className="input"
+                        value={r.rate}
+                        onChange={(e) =>
+                          updateExtraRate(idx, "rate", e.target.value)
+                        }
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeExtraRate(idx)}
+                      className="text-red-700 hover:bg-red-50 w-9 h-9 rounded-md flex items-center justify-center"
+                      title="הסרת תעריף"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="md:col-span-2">
             <label className="label">הערות</label>
             <textarea
