@@ -572,9 +572,11 @@ export default function TasksPage() {
   }
 
   async function togglePaymentStatus(task) {
-    const isPaid =
-      task.payment_status === "שולם" || task.payment_status === "לא לחיוב";
+    const current = task.payment_status || "לא שולם";
+    const isPaid = current === "שולם" || current === "לא לחיוב";
     const newStatus = isPaid ? "לא שולם" : "שולם";
+    if (!confirm(`לשנות סטטוס תשלום מ-"${current}" ל-"${newStatus}"?`))
+      return;
     const { error: updErr } = await supabase
       .from("tasks")
       .update({ payment_status: newStatus })
@@ -1415,7 +1417,14 @@ export default function TasksPage() {
                           }
                         />
                       </td>
-                      <td className="whitespace-nowrap">
+                      <td
+                        className="whitespace-nowrap text-accent-700 hover:bg-accent-50 hover:underline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startEdit(t);
+                        }}
+                        title="לחיצה לעריכת המשימה"
+                      >
                         {formatDate(t.date_gregorian)}
                         {t.date_hebrew && (
                           <div className="text-xs text-ink-500">
