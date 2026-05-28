@@ -172,7 +172,7 @@ function StatusBadge({ status }) {
   return <span className={cls}>{status || "—"}</span>;
 }
 
-function PaymentBadge({ status }) {
+function PaymentBadge({ status, onClick }) {
   const map = {
     "שולם": "badge-success",
     "שולם חלקית": "badge-warning",
@@ -180,6 +180,18 @@ function PaymentBadge({ status }) {
     "לא לחיוב": "badge-neutral",
   };
   const cls = map[status] || "badge-neutral";
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={cls + " cursor-pointer hover:opacity-80 transition-opacity"}
+        title="לחיצה כדי להחליף בין שולם / לא שולם"
+      >
+        {status || "—"}
+      </button>
+    );
+  }
   return <span className={cls}>{status || "—"}</span>;
 }
 
@@ -557,6 +569,25 @@ export default function TasksPage() {
     const { error } = await supabase.from("tasks").delete().eq("id", id);
     if (error) setError(error.message);
     else load();
+  }
+
+  async function togglePaymentStatus(task) {
+    const isPaid =
+      task.payment_status === "שולם" || task.payment_status === "לא לחיוב";
+    const newStatus = isPaid ? "לא שולם" : "שולם";
+    const { error: updErr } = await supabase
+      .from("tasks")
+      .update({ payment_status: newStatus })
+      .eq("id", task.id);
+    if (updErr) {
+      console.error("[toggle payment]", updErr);
+      alert(
+        "עדכון סטטוס תשלום נכשל:\n\n" +
+          (updErr.message || JSON.stringify(updErr)),
+      );
+      return;
+    }
+    load();
   }
 
   function buildExportRows() {
@@ -1405,8 +1436,11 @@ export default function TasksPage() {
                       <td className="font-semibold">
                         {formatCurrency(t.total_after_discount)}
                       </td>
-                      <td>
-                        <PaymentBadge status={t.payment_status} />
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <PaymentBadge
+                          status={t.payment_status}
+                          onClick={() => togglePaymentStatus(t)}
+                        />
                       </td>
                       <td>
                         <StatusBadge status={t.status} />
