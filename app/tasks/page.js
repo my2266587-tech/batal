@@ -828,7 +828,18 @@ export default function TasksPage() {
           <p className="page-subtitle">ניהול פגישות ומשימות עבור כל המטופלים.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm text-ink-500">סה״כ מוצג: {filtered.length}</span>
+          <input
+            type="search"
+            placeholder="חיפוש חופשי..."
+            className="input md:max-w-xs"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+          <span className="text-sm text-ink-500">
+            {searchTerm || filterPatient || filterStatus || filterMeetingType || filterDateFrom || filterDateTo
+              ? `${filtered.length}/${tasks.length}`
+              : `סה״כ: ${filtered.length}`}
+          </span>
           {!formOpen && (
             <>
               <button
@@ -1242,14 +1253,7 @@ export default function TasksPage() {
       )}
 
       <div className="card p-5 space-y-4">
-        <h2 className="section-title">סינון וחיפוש</h2>
-        <input
-          type="search"
-          placeholder="חיפוש חופשי בכל השדות (שם מטופל, הגדרת משימה, פירוט, סטטוס...)"
-          className="input"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
+        <h2 className="section-title">סינון</h2>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div>
             <label className="label">מטופל</label>
