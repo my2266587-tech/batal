@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-function MicIcon({ className = "w-3.5 h-3.5" }) {
+function MicIcon({ className = "w-4 h-4" }) {
   return (
     <svg
       className={className}
@@ -16,7 +16,7 @@ function MicIcon({ className = "w-3.5 h-3.5" }) {
   );
 }
 
-function StopIcon({ className = "w-3.5 h-3.5" }) {
+function StopIcon({ className = "w-4 h-4" }) {
   return (
     <svg
       className={className}
@@ -137,34 +137,20 @@ export default function VoiceButton({
     return null; // hide button on unsupported browsers (e.g. Firefox)
   }
 
-  const sizeClasses =
-    size === "sm" ? "px-2 py-1 text-xs" : "px-3 py-1.5 text-sm";
-
   return (
     <button
       type="button"
       onClick={listening ? stop : start}
       className={
-        "inline-flex items-center gap-1.5 rounded-md font-medium transition-colors border " +
-        sizeClasses +
-        " " +
+        "inline-flex items-center justify-center w-8 h-8 rounded-md border transition-colors " +
         (listening
-          ? "bg-red-50 text-red-700 border-red-200 hover:bg-red-100 animate-pulse"
-          : "bg-white text-accent-700 border-line hover:bg-accent-50")
+          ? "bg-red-100 text-red-700 border-red-300 animate-pulse"
+          : "bg-white text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700")
       }
       title={listening ? "לחיצה לעצירת ההקלטה" : "הקלטה דרך מיקרופון"}
+      aria-label={listening ? "עצירת הקלטה" : "התחלת הקלטה"}
     >
-      {listening ? (
-        <>
-          <StopIcon />
-          עצירה
-        </>
-      ) : (
-        <>
-          <MicIcon />
-          הקלטה
-        </>
-      )}
+      {listening ? <StopIcon /> : <MicIcon />}
     </button>
   );
 }

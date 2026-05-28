@@ -1020,7 +1020,7 @@ export default function TasksPage() {
           </div>
 
           <div className="md:col-span-3">
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2 mb-1">
               <label className="label mb-0">הגדרת משימה</label>
               <VoiceButton
                 getBaseText={() => form.task_definition}
@@ -1035,7 +1035,7 @@ export default function TasksPage() {
           </div>
 
           <div className="md:col-span-3">
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2 mb-1">
               <label className="label mb-0">פירוט פגישה</label>
               <VoiceButton
                 getBaseText={() => form.meeting_details}
@@ -1098,7 +1098,7 @@ export default function TasksPage() {
           </div>
 
           <div>
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2 mb-1">
               <label className="label mb-0">פירוט שיחה</label>
               <VoiceButton
                 getBaseText={() => form.call_details}
@@ -1112,7 +1112,7 @@ export default function TasksPage() {
             />
           </div>
           <div>
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2 mb-1">
               <label className="label mb-0">פירוט מייל</label>
               <VoiceButton
                 getBaseText={() => form.email_details}
@@ -1126,7 +1126,7 @@ export default function TasksPage() {
             />
           </div>
           <div>
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2 mb-1">
               <label className="label mb-0">פירוט אחר</label>
               <VoiceButton
                 getBaseText={() => form.other_details}
