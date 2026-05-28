@@ -11,6 +11,7 @@ import {
   IconButton,
 } from "@/components/Icons";
 import { formatCurrency, formatDate } from "@/lib/format";
+import VoiceButton from "@/components/VoiceButton";
 
 const MEETING_TYPES = ["פרונטלית", "טלפונית", "וידאו", "ביקור בית", "אחר"];
 const STATUSES = ["פתוח", "בוצע", "בוטל"];
@@ -803,7 +804,13 @@ export default function TasksPage() {
           </div>
 
           <div className="md:col-span-3">
-            <label className="label">הגדרת משימה</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="label mb-0">הגדרת משימה</label>
+              <VoiceButton
+                getBaseText={() => form.task_definition}
+                onTranscript={(t) => update("task_definition", t)}
+              />
+            </div>
             <textarea
               className="input min-h-[120px] whitespace-pre-wrap"
               value={form.task_definition}
@@ -812,7 +819,13 @@ export default function TasksPage() {
           </div>
 
           <div className="md:col-span-3">
-            <label className="label">פירוט פגישה</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="label mb-0">פירוט פגישה</label>
+              <VoiceButton
+                getBaseText={() => form.meeting_details}
+                onTranscript={(t) => update("meeting_details", t)}
+              />
+            </div>
             <textarea
               className="input min-h-[120px] whitespace-pre-wrap"
               value={form.meeting_details}
@@ -869,7 +882,13 @@ export default function TasksPage() {
           </div>
 
           <div>
-            <label className="label">פירוט שיחה</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="label mb-0">פירוט שיחה</label>
+              <VoiceButton
+                getBaseText={() => form.call_details}
+                onTranscript={(t) => update("call_details", t)}
+              />
+            </div>
             <textarea
               className="input min-h-[120px] whitespace-pre-wrap"
               value={form.call_details}
@@ -877,7 +896,13 @@ export default function TasksPage() {
             />
           </div>
           <div>
-            <label className="label">פירוט מייל</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="label mb-0">פירוט מייל</label>
+              <VoiceButton
+                getBaseText={() => form.email_details}
+                onTranscript={(t) => update("email_details", t)}
+              />
+            </div>
             <textarea
               className="input min-h-[120px] whitespace-pre-wrap"
               value={form.email_details}
@@ -885,7 +910,13 @@ export default function TasksPage() {
             />
           </div>
           <div>
-            <label className="label">פירוט אחר</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="label mb-0">פירוט אחר</label>
+              <VoiceButton
+                getBaseText={() => form.other_details}
+                onTranscript={(t) => update("other_details", t)}
+              />
+            </div>
             <textarea
               className="input min-h-[120px] whitespace-pre-wrap"
               value={form.other_details}
