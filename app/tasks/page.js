@@ -12,6 +12,7 @@ import {
 } from "@/components/Icons";
 import { formatCurrency, formatDate } from "@/lib/format";
 import VoiceButton from "@/components/VoiceButton";
+import * as XLSX from "xlsx";
 
 const MEETING_TYPES = ["פרונטלית", "טלפונית", "וידאו", "ביקור בית", "אחר"];
 const STATUSES = ["פתוח", "בוצע", "בוטל"];
@@ -558,6 +559,192 @@ export default function TasksPage() {
     else load();
   }
 
+  function buildExportRows() {
+    return filtered.map((t) => ({
+      "תאריך לועזי": t.date_gregorian
+        ? formatDate(t.date_gregorian)
+        : "",
+      "תאריך עברי": t.date_hebrew || "",
+      "מטופל": patientNameById[t.patient_id] || "",
+      "סוג פגישה": t.meeting_type || "",
+      "שעת התחלה": t.start_time ? String(t.start_time).slice(0, 5) : "",
+      "שעת סיום": t.end_time ? String(t.end_time).slice(0, 5) : "",
+      "שעות": Number(t.hours || 0).toFixed(2),
+      "סוג חיוב": t.rate_label || "ברירת מחדל",
+      "הגדרת משימה": t.task_definition || "",
+      "פירוט פגישה": t.meeting_details || "",
+      "פירוט שיחה": t.call_details || "",
+      "פירוט מייל": t.email_details || "",
+      "פירוט אחר": t.other_details || "",
+      "נסיעות": t.travel || "",
+      "תשלום נסיעה": Number(t.travel_payment || 0).toFixed(2),
+      "נוכחות": t.attendance || "",
+      'סה"כ לפני הנחה': Number(t.total_before_discount || 0).toFixed(2),
+      'סה"כ אחרי הנחה': Number(t.total_after_discount || 0).toFixed(2),
+      "סטטוס פגישה": t.status || "",
+      "סטטוס תשלום": t.payment_status || "",
+    }));
+  }
+
+  function exportToExcel() {
+    if (filtered.length === 0) {
+      alert("אין שורות לייצוא");
+      return;
+    }
+    const rows = buildExportRows();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    // Set reasonable column widths
+    const headers = Object.keys(rows[0] || {});
+    ws["!cols"] = headers.map((h) => ({ wch: Math.max(12, Math.min(40, h.length + 8)) }));
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
+    XLSX.utils.book_append_sheet(wb, ws, "משימות");
+    const today = formatDate(new Date()).replace(/\//g, "-");
+    XLSX.writeFile(wb, `משימות_${today}.xlsx`);
+  }
+
+  function exportToPDF() {
+    if (filtered.length === 0) {
+      alert("אין שורות לייצוא");
+      return;
+    }
+    const rows = buildExportRows();
+    const today = formatDate(new Date());
+
+    // Summary totals for the printed page
+    let totalHours = 0,
+      totalAfter = 0,
+      totalBefore = 0;
+    filtered.forEach((t) => {
+      totalHours += Number(t.hours) || 0;
+      totalAfter += Number(t.total_after_discount) || 0;
+      totalBefore += Number(t.total_before_discount) || 0;
+    });
+
+    const headersForPdf = [
+      "תאריך",
+      "מטופל",
+      "סוג פגישה",
+      "שעות",
+      "משימה",
+      "תשלום",
+      "סטטוס תשלום",
+    ];
+
+    const escape = (s) =>
+      String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+    const bodyHtml = filtered
+      .map((t) => {
+        const cells = [
+          formatDate(t.date_gregorian) || "—",
+          patientNameById[t.patient_id] || "—",
+          t.meeting_type || "—",
+          Number(t.hours || 0).toFixed(2),
+          (t.task_definition || "").slice(0, 100),
+          formatCurrency(t.total_after_discount),
+          t.payment_status || "—",
+        ];
+        return `<tr>${cells.map((c) => `<td>${escape(c)}</td>`).join("")}</tr>`;
+      })
+      .join("");
+
+    const html = `<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="utf-8" />
+  <title>משימות ${today}</title>
+  <style>
+    @page { size: A4 landscape; margin: 16mm; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Heebo", "Arial Hebrew", Arial, sans-serif;
+      direction: rtl;
+      color: #1f2937;
+      font-size: 11pt;
+      margin: 0;
+      padding: 24px;
+    }
+    h1 { font-size: 18pt; margin: 0 0 4px 0; }
+    .meta { color: #64748b; font-size: 10pt; margin-bottom: 16px; }
+    .summary {
+      display: flex;
+      gap: 24px;
+      padding: 12px 16px;
+      background: #F8FAFC;
+      border: 1px solid #E2E8F0;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 10pt;
+    }
+    .summary div { display: flex; flex-direction: column; gap: 2px; }
+    .summary .label { color: #64748b; }
+    .summary .value { font-weight: bold; font-size: 12pt; }
+    table { width: 100%; border-collapse: collapse; font-size: 10pt; }
+    th, td {
+      padding: 8px 10px;
+      text-align: right;
+      border-bottom: 1px solid #E2E8F0;
+      vertical-align: top;
+    }
+    th { background: #F1F5F9; font-weight: 600; border-bottom: 2px solid #CBD5E1; }
+    tr:nth-child(even) td { background: #FAFBFC; }
+    .footer { margin-top: 20px; font-size: 9pt; color: #94a3b8; text-align: center; }
+    @media print {
+      body { padding: 0; }
+      .no-print { display: none; }
+    }
+    .no-print {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      background: #EA580C;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 11pt;
+    }
+  </style>
+</head>
+<body>
+  <button class="no-print" onclick="window.print()">הדפסה / שמירה כ-PDF</button>
+  <h1>משימות ופגישות</h1>
+  <div class="meta">הופק בתאריך ${today} · ${rows.length} משימות</div>
+  <div class="summary">
+    <div><span class="label">סך שעות</span><span class="value">${totalHours.toFixed(2)}</span></div>
+    <div><span class="label">סה"כ לפני הנחה</span><span class="value">${escape(formatCurrency(totalBefore))}</span></div>
+    <div><span class="label">סה"כ אחרי הנחה</span><span class="value">${escape(formatCurrency(totalAfter))}</span></div>
+  </div>
+  <table>
+    <thead>
+      <tr>${headersForPdf.map((h) => `<th>${escape(h)}</th>`).join("")}</tr>
+    </thead>
+    <tbody>${bodyHtml}</tbody>
+  </table>
+  <div class="footer">בט"ל — מערכת ניהול משימות</div>
+  <script>setTimeout(() => window.print(), 300);</script>
+</body>
+</html>`;
+
+    const win = window.open("", "_blank");
+    if (!win) {
+      alert(
+        "הדפדפן חסם פתיחת חלון. אפשרי חלונות קופצים לאתר זה ונסי שוב.",
+      );
+      return;
+    }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+  }
+
   const patientNameById = useMemo(() => {
     const m = {};
     patients.forEach((p) => (m[p.id] = p.full_name));
@@ -640,12 +827,30 @@ export default function TasksPage() {
           <h1 className="page-title">ניהול משימות</h1>
           <p className="page-subtitle">ניהול פגישות ומשימות עבור כל המטופלים.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm text-ink-500">סה״כ מוצג: {filtered.length}</span>
           {!formOpen && (
-            <button type="button" className="btn-primary" onClick={openAddForm}>
-              + הוספת משימה
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={exportToExcel}
+                title="ייצוא לקובץ Excel"
+              >
+                ⬇ Excel
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={exportToPDF}
+                title="ייצוא ל-PDF / הדפסה"
+              >
+                ⬇ PDF
+              </button>
+              <button type="button" className="btn-primary" onClick={openAddForm}>
+                + הוספת משימה
+              </button>
+            </>
           )}
         </div>
       </header>
