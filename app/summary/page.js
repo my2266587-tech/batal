@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
-import { formatCurrency, formatDate } from "@/lib/format";
+import {
+  formatCurrency,
+  formatDate,
+  formatDecimalHoursAsHHMM,
+} from "@/lib/format";
 
 export default function SummaryPage() {
   const [tasks, setTasks] = useState([]);
@@ -140,7 +144,7 @@ export default function SummaryPage() {
         <div className="stat-card">
           <div className="stat-label">שעות החודש</div>
           <div className="stat-value">
-            {loading ? "—" : monthly.hours.toFixed(2)}
+            {loading ? "—" : formatDecimalHoursAsHHMM(monthly.hours)}
           </div>
         </div>
         <div className="stat-card">
@@ -209,7 +213,7 @@ export default function SummaryPage() {
                       {row.latestDate ? formatDate(row.latestDate) : "—"}
                     </td>
                     <td>{row.count}</td>
-                    <td>{row.hours.toFixed(2)}</td>
+                    <td>{formatDecimalHoursAsHHMM(row.hours)}</td>
                     <td>{formatCurrency(row.before)}</td>
                     <td className="font-semibold">
                       {formatCurrency(row.after)}

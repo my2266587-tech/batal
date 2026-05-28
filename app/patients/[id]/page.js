@@ -6,7 +6,11 @@ import { useParams, useRouter } from "next/navigation";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import { DeleteIcon, DocumentIcon, EditIcon, IconButton } from "@/components/Icons";
-import { formatCurrency, formatDate } from "@/lib/format";
+import {
+  formatCurrency,
+  formatDate,
+  formatDecimalHoursAsHHMM,
+} from "@/lib/format";
 
 function sanitize(name) {
   return String(name || "file")
@@ -153,7 +157,7 @@ function TasksSection({
                       </div>
                     </td>
                     <td>{t.meeting_type || "—"}</td>
-                    <td>{Number(t.hours || 0).toFixed(2)}</td>
+                    <td>{formatDecimalHoursAsHHMM(t.hours)}</td>
                     <td className="font-medium">
                       {formatCurrency(t.total_after_discount)}
                     </td>
@@ -546,7 +550,7 @@ export default function PatientCardPage() {
       <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="stat-card">
           <div className="stat-label">סך שעות</div>
-          <div className="stat-value">{totals.hours.toFixed(2)}</div>
+          <div className="stat-value">{formatDecimalHoursAsHHMM(totals.hours)}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">סך פגישות</div>

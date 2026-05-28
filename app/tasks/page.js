@@ -10,7 +10,15 @@ import {
   EditIcon,
   IconButton,
 } from "@/components/Icons";
-import { formatCurrency, formatDate } from "@/lib/format";
+import {
+  formatCurrency,
+  formatDate,
+  parseDurationInputToMinutes,
+  minutesToInputString,
+  decimalHoursToInputString,
+  formatMinutesHebrew,
+  formatDecimalHoursAsHHMM,
+} from "@/lib/format";
 import VoiceButton from "@/components/VoiceButton";
 import * as XLSX from "xlsx";
 
@@ -133,28 +141,8 @@ function toHebrewDate(gregStr) {
   }
 }
 
-function formatHoursFriendly(hoursNum) {
-  if (!Number.isFinite(hoursNum) || hoursNum <= 0) return "";
-  const totalMin = Math.round(hoursNum * 60);
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  let phrase;
-  if (h === 0) {
-    phrase = `${m} דקות`;
-  } else if (m === 0) {
-    if (h === 1) phrase = "שעה אחת";
-    else if (h === 2) phrase = "שעתיים";
-    else phrase = `${h} שעות`;
-  } else {
-    let hp;
-    if (h === 1) hp = "שעה";
-    else if (h === 2) hp = "שעתיים";
-    else hp = `${h} שעות`;
-    phrase = `${hp} ו-${m} דקות`;
-  }
-  const numeric = parseFloat(hoursNum.toFixed(2)).toString();
-  return `${phrase} (${numeric} שעות)`;
-}
+// formatHoursFriendly removed — using formatMinutesHebrew + formatDecimalHoursAsHHMM
+// from @/lib/format for consistency with the new duration interpretation.
 
 function toNumber(v) {
   if (v === "" || v === null || v === undefined) return 0;
@@ -231,7 +219,7 @@ function TaskDetails({ task }) {
           label="משך"
           value={
             Number(task.hours) > 0
-              ? formatHoursFriendly(Number(task.hours))
+              ? formatMinutesHebrew(Math.round(Number(task.hours) * 60))
               : "—"
           }
         />
@@ -386,8 +374,10 @@ export default function TasksPage() {
 
   function computeTotals(patientId, hoursVal, rateLabel) {
     const p = patients.find((x) => x.id === patientId);
-    const h = Number(hoursVal);
-    if (!p || !Number.isFinite(h)) return null;
+    // Parse duration from the typed STRING using new rules + legacy 0.50.
+    const minutes = parseDurationInputToMinutes(hoursVal);
+    if (!p || minutes === null) return null;
+    const h = minutes / 60;
     const r = getRateForPatient(p, rateLabel);
     if (!r) return null;
     return {
@@ -405,14 +395,17 @@ export default function TasksPage() {
         next.date_hebrew = value ? toHebrewDate(value) : "";
       }
 
-      // Auto-calc hours when start_time / end_time change
+      // Auto-calc hours when start_time / end_time change. Result is a
+      // STRING in the new canonical form (e.g. "0.30", "1.30") so it
+      // parses correctly with the new rules.
       if (field === "start_time" || field === "end_time") {
         const calc = calcHoursFromTimes(
           field === "start_time" ? value : next.start_time,
           field === "end_time" ? value : next.end_time,
         );
         if (calc !== null) {
-          next.hours = calc.toFixed(2);
+          const mins = Math.round(calc * 60);
+          next.hours = minutesToInputString(mins);
         }
       }
 
@@ -474,7 +467,9 @@ export default function TasksPage() {
       date_hebrew: t.date_hebrew || "",
       start_time: t.start_time ? String(t.start_time).slice(0, 5) : "",
       end_time: t.end_time ? String(t.end_time).slice(0, 5) : "",
-      hours: t.hours ?? "",
+      // Convert stored decimal hours to canonical input string. Existing 0.50
+      // (legacy half hour) becomes "0.30" — same 30 minutes by the new rules.
+      hours: t.hours != null && t.hours !== "" ? decimalHoursToInputString(t.hours) : "",
       task_definition: t.task_definition || "",
       meeting_details: t.meeting_details || "",
       meeting_type: t.meeting_type || "",
@@ -526,7 +521,14 @@ export default function TasksPage() {
       date_hebrew: form.date_hebrew || null,
       start_time: form.start_time || null,
       end_time: form.end_time || null,
-      hours: toNumber(form.hours),
+      // Parse the typed string with new rules (and 0.50 legacy exception),
+      // then store as decimal hours (rounded to 2 decimal places to fit the
+      // numeric(6,2) column). Existing behavior preserved for legacy values.
+      hours: (function () {
+        const mins = parseDurationInputToMinutes(form.hours);
+        if (mins === null) return toNumber(form.hours);
+        return Math.round((mins / 60) * 100) / 100;
+      })(),
       task_definition: form.task_definition || null,
       meeting_details: form.meeting_details || null,
       meeting_type: form.meeting_type || null,
@@ -969,11 +971,19 @@ export default function TasksPage() {
               value={form.hours}
               onChange={(e) => update("hours", e.target.value)}
             />
-            {form.hours && Number(form.hours) > 0 && (
-              <p className="text-xs text-ink-700 mt-1 font-medium">
-                משך: {formatHoursFriendly(Number(form.hours))}
-              </p>
-            )}
+            {(() => {
+              const mins = parseDurationInputToMinutes(form.hours);
+              if (mins === null || mins <= 0) return null;
+              const decimalForRate = mins / 60;
+              return (
+                <p className="text-xs text-ink-700 mt-1 font-medium">
+                  משך: {formatMinutesHebrew(mins)} ·{" "}
+                  <span className="text-ink-500 font-normal">
+                    ({decimalForRate.toFixed(2)} שעות לחישוב)
+                  </span>
+                </p>
+              );
+            })()}
             {form.start_time && form.end_time && (
               <p className="text-[11px] text-ink-500 mt-0.5">
                 חושב מתוך שעת התחלה וסיום; ניתן לדרוס ידנית.
@@ -1357,7 +1367,7 @@ export default function TasksPage() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="stat-card">
           <div className="stat-label">סך שעות</div>
-          <div className="stat-value">{totals.hours.toFixed(2)}</div>
+          <div className="stat-value">{formatDecimalHoursAsHHMM(totals.hours)}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">משימות / פגישות</div>
@@ -1441,7 +1451,7 @@ export default function TasksPage() {
                         </div>
                       </td>
                       <td>{t.meeting_type || "—"}</td>
-                      <td>{Number(t.hours || 0).toFixed(2)}</td>
+                      <td>{formatDecimalHoursAsHHMM(t.hours)}</td>
                       <td className="font-semibold">
                         {formatCurrency(t.total_after_discount)}
                       </td>
