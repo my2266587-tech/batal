@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatDate } from "@/lib/format";
 
 export default function SummaryPage() {
   const [tasks, setTasks] = useState([]);
@@ -81,6 +81,7 @@ export default function SummaryPage() {
           after: 0,
           travel: 0,
           count: 0,
+          latestDate: null,
         });
       }
       const row = map.get(key);
@@ -89,8 +90,22 @@ export default function SummaryPage() {
       row.after += Number(t.total_after_discount) || 0;
       row.travel += Number(t.travel_payment) || 0;
       row.count += 1;
+      if (
+        t.date_gregorian &&
+        (!row.latestDate || t.date_gregorian > row.latestDate)
+      ) {
+        row.latestDate = t.date_gregorian;
+      }
     });
-    return Array.from(map.values()).sort((a, b) => b.after - a.after);
+    // Sort by latest task date descending (newest first); patients with no
+    // dated tasks go to the end.
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.latestDate && b.latestDate)
+        return b.latestDate.localeCompare(a.latestDate);
+      if (a.latestDate) return -1;
+      if (b.latestDate) return 1;
+      return 0;
+    });
   }, [tasks, patientNameById]);
 
   const filteredByPatient = useMemo(() => {
@@ -165,6 +180,7 @@ export default function SummaryPage() {
             <thead>
               <tr>
                 <th>מטופל</th>
+                <th>פעילות אחרונה</th>
                 <th>פגישות</th>
                 <th>שעות</th>
                 <th>לפני הנחה</th>
@@ -175,13 +191,13 @@ export default function SummaryPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="text-center text-ink-500 py-8">
+                  <td colSpan={7} className="text-center text-ink-500 py-8">
                     טוען...
                   </td>
                 </tr>
               ) : filteredByPatient.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="text-center text-ink-500 py-8">
+                  <td colSpan={7} className="text-center text-ink-500 py-8">
                     {searchTerm ? "אין תוצאות לחיפוש" : "אין נתונים להצגה"}
                   </td>
                 </tr>
@@ -189,6 +205,9 @@ export default function SummaryPage() {
                 filteredByPatient.map((row) => (
                   <tr key={row.id || "unknown"}>
                     <td className="font-medium">{row.name}</td>
+                    <td className="text-ink-500 whitespace-nowrap">
+                      {row.latestDate ? formatDate(row.latestDate) : "—"}
+                    </td>
                     <td>{row.count}</td>
                     <td>{row.hours.toFixed(2)}</td>
                     <td>{formatCurrency(row.before)}</td>

@@ -356,12 +356,32 @@ export default function PatientCardPage() {
   const UNPAID_STATUSES = ["לא שולם", "שולם חלקית"];
   const isUnpaidStatus = (s) => UNPAID_STATUSES.includes(s || "לא שולם");
 
+  // Defensive client-side sort: newest first. Falls back to start_time and
+  // created_at when date_gregorian is equal or missing.
+  function sortByDateDesc(a, b) {
+    const ad = a.date_gregorian || "";
+    const bd = b.date_gregorian || "";
+    if (ad !== bd) {
+      if (!ad) return 1;
+      if (!bd) return -1;
+      return bd.localeCompare(ad);
+    }
+    const at = a.start_time || "";
+    const bt = b.start_time || "";
+    if (at !== bt) {
+      if (!at) return 1;
+      if (!bt) return -1;
+      return bt.localeCompare(at);
+    }
+    return String(b.created_at || "").localeCompare(String(a.created_at || ""));
+  }
+
   const unpaidTasks = useMemo(
-    () => tasks.filter((t) => isUnpaidStatus(t.payment_status)),
+    () => tasks.filter((t) => isUnpaidStatus(t.payment_status)).sort(sortByDateDesc),
     [tasks],
   );
   const paidTasks = useMemo(
-    () => tasks.filter((t) => !isUnpaidStatus(t.payment_status)),
+    () => tasks.filter((t) => !isUnpaidStatus(t.payment_status)).sort(sortByDateDesc),
     [tasks],
   );
 
