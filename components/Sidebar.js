@@ -9,6 +9,7 @@ const links = [
   { href: "/patients", label: "מטופלים" },
   { href: "/tasks", label: "ניהול משימות" },
   { href: "/documents", label: "מסמכים" },
+  { href: "/contacts", label: "גורמי קשר" },
   { href: "/summary", label: "סיכום שעות ותשלום לפי מטופל" },
   { href: "/cash", label: "מעשר געלט" },
   { href: "/import", label: "ייבוא" },

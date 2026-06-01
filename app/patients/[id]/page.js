@@ -183,6 +183,8 @@ export default function PatientCardPage() {
   const [patient, setPatient] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [docs, setDocs] = useState([]);
+  const [linkedContacts, setLinkedContacts] = useState([]);
+  const [allContacts, setAllContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -194,9 +196,27 @@ export default function PatientCardPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
 
+  // Contact link form state
+  const [contactFormOpen, setContactFormOpen] = useState(false);
+  const [contactMode, setContactMode] = useState("link"); // "link" | "create"
+  const [linkExistingId, setLinkExistingId] = useState("");
+  const [linkNotes, setLinkNotes] = useState("");
+  const [newContact, setNewContact] = useState({
+    full_name: "",
+    contact_type: "",
+    organization: "",
+    role: "",
+    phone: "",
+    email: "",
+    address: "",
+    notes: "",
+  });
+  const [savingContact, setSavingContact] = useState(false);
+  const [contactError, setContactError] = useState("");
+
   async function loadAll() {
     setLoading(true);
-    const [pRes, tRes, dRes] = await Promise.all([
+    const [pRes, tRes, dRes, pcRes, cRes] = await Promise.all([
       supabase.from("patients").select("*").eq("id", id).maybeSingle(),
       supabase
         .from("tasks")
@@ -210,14 +230,137 @@ export default function PatientCardPage() {
         .select("*")
         .eq("patient_id", id)
         .order("uploaded_at", { ascending: false }),
+      supabase
+        .from("patient_contacts")
+        .select("id, notes, contact:contacts(*)")
+        .eq("patient_id", id)
+        .order("created_at", { ascending: false }),
+      supabase.from("contacts").select("*").order("full_name"),
     ]);
     if (pRes.error) setError(pRes.error.message);
     if (tRes.error) setError(tRes.error.message);
     if (dRes.error) setError(dRes.error.message);
+    if (pcRes.error) setError(pcRes.error.message);
+    if (cRes.error) setError(cRes.error.message);
     setPatient(pRes.data || null);
     setTasks(tRes.data || []);
     setDocs(dRes.data || []);
+    setLinkedContacts(pcRes.data || []);
+    setAllContacts(cRes.data || []);
     setLoading(false);
+  }
+
+  function resetContactForm() {
+    setContactMode("link");
+    setLinkExistingId("");
+    setLinkNotes("");
+    setNewContact({
+      full_name: "",
+      contact_type: "",
+      organization: "",
+      role: "",
+      phone: "",
+      email: "",
+      address: "",
+      notes: "",
+    });
+    setContactError("");
+  }
+
+  function openContactForm() {
+    resetContactForm();
+    setContactFormOpen(true);
+  }
+
+  function closeContactForm() {
+    setContactFormOpen(false);
+    resetContactForm();
+  }
+
+  async function submitLinkContact(e) {
+    e.preventDefault();
+    setContactError("");
+    setSavingContact(true);
+
+    let contactId = null;
+
+    if (contactMode === "link") {
+      if (!linkExistingId) {
+        setContactError("יש לבחור גורם קשר קיים");
+        setSavingContact(false);
+        return;
+      }
+      contactId = linkExistingId;
+    } else {
+      if (!newContact.full_name.trim()) {
+        setContactError("יש להזין שם גורם קשר");
+        setSavingContact(false);
+        return;
+      }
+      const { data, error: insErr } = await supabase
+        .from("contacts")
+        .insert([
+          {
+            full_name: newContact.full_name.trim(),
+            contact_type: newContact.contact_type || null,
+            organization: newContact.organization || null,
+            role: newContact.role || null,
+            phone: newContact.phone || null,
+            email: newContact.email || null,
+            address: newContact.address || null,
+            notes: newContact.notes || null,
+          },
+        ])
+        .select("id")
+        .single();
+      if (insErr) {
+        setContactError("יצירת גורם קשר נכשלה: " + insErr.message);
+        setSavingContact(false);
+        return;
+      }
+      contactId = data.id;
+    }
+
+    const { error: linkErr } = await supabase
+      .from("patient_contacts")
+      .insert([
+        {
+          patient_id: id,
+          contact_id: contactId,
+          notes: linkNotes || null,
+        },
+      ]);
+    if (linkErr) {
+      setContactError("קישור גורם קשר נכשל: " + linkErr.message);
+      setSavingContact(false);
+      return;
+    }
+
+    setSavingContact(false);
+    closeContactForm();
+    loadAll();
+  }
+
+  async function unlinkContact(patientContactId) {
+    if (!confirm("להסיר את גורם הקשר מהמטופלת? (גורם הקשר עצמו לא יימחק)"))
+      return;
+    const { error } = await supabase
+      .from("patient_contacts")
+      .delete()
+      .eq("id", patientContactId);
+    if (error) setError(error.message);
+    else loadAll();
+  }
+
+  async function updateLinkNote(patientContactId, currentNote) {
+    const note = prompt("הערה למטופלת על גורם הקשר:", currentNote || "");
+    if (note === null) return;
+    const { error } = await supabase
+      .from("patient_contacts")
+      .update({ notes: note || null })
+      .eq("id", patientContactId);
+    if (error) setError(error.message);
+    else loadAll();
   }
 
   useEffect(() => {
@@ -583,6 +726,289 @@ export default function PatientCardPage() {
         onTogglePaid={togglePaymentStatus}
         accent="done"
       />
+
+      <section className="card">
+        <div className="px-6 py-5 border-b border-line flex items-center justify-between flex-wrap gap-3">
+          <h2 className="section-title">גורמי קשר של המטופלת</h2>
+          {!contactFormOpen && (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={openContactForm}
+            >
+              + הוספת גורם קשר
+            </button>
+          )}
+        </div>
+
+        {contactFormOpen && (
+          <form
+            onSubmit={submitLinkContact}
+            className="p-6 space-y-4 border-b border-line bg-surface-subtle"
+          >
+            <div className="flex gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setContactMode("link")}
+                className={
+                  "rounded-md px-4 py-2 text-sm font-medium transition-colors " +
+                  (contactMode === "link"
+                    ? "bg-accent-600 text-white"
+                    : "bg-white border border-line text-ink-700 hover:bg-surface-subtle")
+                }
+              >
+                קישור גורם קשר קיים
+              </button>
+              <button
+                type="button"
+                onClick={() => setContactMode("create")}
+                className={
+                  "rounded-md px-4 py-2 text-sm font-medium transition-colors " +
+                  (contactMode === "create"
+                    ? "bg-accent-600 text-white"
+                    : "bg-white border border-line text-ink-700 hover:bg-surface-subtle")
+                }
+              >
+                יצירת גורם קשר חדש
+              </button>
+            </div>
+
+            {contactMode === "link" ? (
+              <div>
+                <label className="label">בחרי גורם קשר *</label>
+                <select
+                  className="input"
+                  value={linkExistingId}
+                  onChange={(e) => setLinkExistingId(e.target.value)}
+                  required
+                >
+                  <option value="">— בחרי —</option>
+                  {allContacts
+                    .filter(
+                      (c) =>
+                        !linkedContacts.some(
+                          (lc) => lc.contact && lc.contact.id === c.id,
+                        ),
+                    )
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.full_name}
+                        {c.organization ? ` — ${c.organization}` : ""}
+                        {c.contact_type ? ` (${c.contact_type})` : ""}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="label">שם *</label>
+                  <input
+                    className="input"
+                    value={newContact.full_name}
+                    onChange={(e) =>
+                      setNewContact((c) => ({
+                        ...c,
+                        full_name: e.target.value,
+                      }))
+                    }
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="label">סוג גורם</label>
+                  <input
+                    className="input"
+                    placeholder="ביטוח לאומי / קופ״ח / רווחה / וכו'"
+                    value={newContact.contact_type}
+                    onChange={(e) =>
+                      setNewContact((c) => ({
+                        ...c,
+                        contact_type: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="label">ארגון</label>
+                  <input
+                    className="input"
+                    value={newContact.organization}
+                    onChange={(e) =>
+                      setNewContact((c) => ({
+                        ...c,
+                        organization: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="label">תפקיד</label>
+                  <input
+                    className="input"
+                    value={newContact.role}
+                    onChange={(e) =>
+                      setNewContact((c) => ({ ...c, role: e.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="label">טלפון</label>
+                  <input
+                    className="input"
+                    value={newContact.phone}
+                    onChange={(e) =>
+                      setNewContact((c) => ({ ...c, phone: e.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="label">אימייל</label>
+                  <input
+                    className="input"
+                    type="email"
+                    value={newContact.email}
+                    onChange={(e) =>
+                      setNewContact((c) => ({ ...c, email: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="label">כתובת / סניף</label>
+                  <input
+                    className="input"
+                    value={newContact.address}
+                    onChange={(e) =>
+                      setNewContact((c) => ({
+                        ...c,
+                        address: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label className="label">הערה ספציפית למטופלת</label>
+              <textarea
+                className="input min-h-[60px]"
+                placeholder="לדוגמה: עו״ס מטפלת — לפנות בבקרים בלבד"
+                value={linkNotes}
+                onChange={(e) => setLinkNotes(e.target.value)}
+              />
+            </div>
+
+            {contactError && (
+              <p className="text-red-700 text-sm">{contactError}</p>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                type="submit"
+                className="btn-primary"
+                disabled={savingContact}
+              >
+                {savingContact ? "שומר..." : "שמירה"}
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={closeContactForm}
+                disabled={savingContact}
+              >
+                ביטול
+              </button>
+            </div>
+          </form>
+        )}
+
+        <div className="p-6">
+          {linkedContacts.length === 0 ? (
+            <p className="text-sm text-ink-500">
+              עדיין אין גורמי קשר מקושרים — לחצי על "+ הוספת גורם קשר" כדי
+              להוסיף.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {linkedContacts.map((lc) => {
+                const c = lc.contact || {};
+                return (
+                  <div
+                    key={lc.id}
+                    className="border border-line rounded-md p-4 bg-white"
+                  >
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="flex-1 min-w-[200px]">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-ink-900">
+                            {c.full_name || "—"}
+                          </span>
+                          {c.contact_type && (
+                            <span className="badge-info">
+                              {c.contact_type}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-sm text-ink-500 mt-0.5">
+                          {[c.role, c.organization].filter(Boolean).join(" · ") ||
+                            "—"}
+                        </div>
+                        <div className="mt-2 text-sm text-ink-700 flex flex-wrap gap-x-4 gap-y-1">
+                          {c.phone && (
+                            <span>
+                              <span className="text-ink-500 text-xs">טל׳: </span>
+                              {c.phone}
+                            </span>
+                          )}
+                          {c.email && (
+                            <span>
+                              <span className="text-ink-500 text-xs">מייל: </span>
+                              {c.email}
+                            </span>
+                          )}
+                          {c.address && (
+                            <span>
+                              <span className="text-ink-500 text-xs">
+                                כתובת:{" "}
+                              </span>
+                              {c.address}
+                            </span>
+                          )}
+                        </div>
+                        {lc.notes && (
+                          <div className="mt-2 text-sm bg-accent-50 border border-accent-200 rounded-md p-2 whitespace-pre-wrap">
+                            <span className="text-accent-700 text-xs font-semibold">
+                              הערה למטופלת:
+                            </span>
+                            <div className="text-ink-900">{lc.notes}</div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex gap-1">
+                        <IconButton
+                          variant="edit"
+                          title="עריכת הערה"
+                          onClick={() => updateLinkNote(lc.id, lc.notes)}
+                        >
+                          <EditIcon />
+                        </IconButton>
+                        <IconButton
+                          variant="delete"
+                          title="הסרת הקישור"
+                          onClick={() => unlinkContact(lc.id)}
+                        >
+                          <DeleteIcon />
+                        </IconButton>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </section>
 
       <section className="card">
         <div className="px-6 py-5 border-b border-line flex items-center justify-between">
