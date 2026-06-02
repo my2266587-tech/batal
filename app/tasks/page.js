@@ -328,9 +328,12 @@ export default function TasksPage() {
       supabase
         .from("tasks")
         .select("*")
+        // Primary sort: most recently CREATED task first — so a task just
+        // added by the user always appears at the top of the list.
+        // Secondary: by meeting date / start time, both desc.
+        .order("created_at", { ascending: false })
         .order("date_gregorian", { ascending: false, nullsFirst: false })
-        .order("start_time", { ascending: false, nullsFirst: false })
-        .order("created_at", { ascending: false }),
+        .order("start_time", { ascending: false, nullsFirst: false }),
       supabase
         .from("patients")
         .select(
