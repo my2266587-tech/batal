@@ -1,13 +1,25 @@
-// Telephone task creation via Yemot Hamashiach ("ימות המשיח").
+// Telephone task creation via Yemot Hamashiach ("ימות המשיח") — single-recording flow.
 //
-// A single Yemot "API" extension points at this endpoint. The server drives the
-// whole conversation: on every interaction Yemot calls us, we look up the call
-// state in the transient `ivr_sessions` table, advance one step, and answer with
-// the next prompt. The task is written to the existing `tasks` table ONLY when
-// the caller confirms (presses 1). A dropped call therefore never creates a
-// partial task. Duplicates are prevented by the unique call id (ApiCallId).
+// A single Yemot "API" extension points at this endpoint. The caller says ONE
+// sentence containing: the patient's name, the duration (hours), and the task
+// definition. After she confirms (presses 1), the server parses the transcript
+// and creates a task DIRECTLY in the existing `tasks` table.
 //
-// No payment / case / RLS logic is touched. Anon key only (server-side).
+// State for the (multi-request) call lives in the transient `ivr_sessions`
+// table, so a dropped call before confirmation never creates a partial task.
+// Duplicates are prevented by the unique call id (ApiCallId).
+//
+// Field mapping (existing `tasks` columns):
+//   patient name      → patient_id (matched by name; null + note if unmatched)
+//   duration (hours)  → hours
+//   task definition   → task_definition
+//   source            → source = "phone"
+//   caller number     → caller_phone
+//   recording path    → recording_url
+//   full transcript   → transcription
+//   unique call id    → call_external_id
+//
+// No payment / case logic is touched. Anon key only (server-side).
 
 import { getServerSupabase } from "@/lib/supabaseServer";
 import {
@@ -17,34 +29,16 @@ import {
   sayAndHangup,
   t,
   f,
-  priorityText,
-  resolveDueDate,
-  parseManualDate,
-  parseManualTime,
-  dueDateText,
+  parseHebrewDuration,
 } from "@/lib/yemot";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Steps in the conversation.
-const STEP = {
-  START: 1,
-  TITLE: 2,
-  DESC: 3,
-  DATE_CHOICE: 4,
-  DATE_MANUAL: 5,
-  TIME_CHOICE: 6,
-  TIME_MANUAL: 7,
-  PRIORITY: 8,
-  LINK_CHOICE: 9,
-  PATIENT_KEY: 10,
-  CONFIRM: 11,
-  DONE: 12,
-};
+// Steps in the (short) conversation.
+const STEP = { START: 1, RECORD: 2, CONFIRM: 3, DONE: 4 };
 
-const TITLE_PLACEHOLDER = "🎤 משימה מהטלפון - יש להאזין להקלטה";
-const DESC_PLACEHOLDER = "🎤 תיאור מוקלט - יש להאזין להקלטה";
+const TASK_PLACEHOLDER = "🎤 משימה מהטלפון - יש להאזין להקלטה";
 
 function textResponse(body, status = 200) {
   return new Response(body, {
@@ -53,20 +47,41 @@ function textResponse(body, status = 200) {
   });
 }
 
-// Variable name Yemot reads each step into — namespaced by attempt so that a
-// "re-record" (which bumps `attempt`) is never shadowed by an echoed old value.
+// Variable name Yemot reads each step into — namespaced by attempt so a
+// "re-record" (which bumps `attempt`) is never shadowed by an echoed value.
 function varName(step, attempt) {
   return `v${step}_${attempt}`;
 }
 
-// Keep only digits from a phone-ish string.
-function digitsOnly(s) {
-  return String(s || "").replace(/\D/g, "");
+// Normalise a Hebrew string for name comparison.
+function normHeb(s) {
+  return String(s || "")
+    .replace(/[֑-ׇ]/g, "") // niqqud / cantillation
+    .replace(/["'׳״.,\-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-// Build the prompt to send for the current step.
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Pull a transcription out of whatever field Yemot may have used.
+function pickTranscription(params, recVar) {
+  const keys = [
+    "transcription", "transcript", "ApiTranscript", "ApiTranscription",
+    "text", "ApiRecordingText",
+    `${recVar}_transcription`, `${recVar}Transcription`, `${recVar}_text`,
+  ];
+  for (const k of keys) {
+    if (params[k] != null && String(params[k]).trim() !== "") {
+      return String(params[k]).trim();
+    }
+  }
+  return "";
+}
+
 function renderStep(session) {
-  const v = (step) => varName(step, session.attempt);
   switch (session.step) {
     case STEP.START:
       return readTap(t("להקלטת משימה חדשה הקישי 1"), varName(STEP.START, 1), {
@@ -74,109 +89,57 @@ function renderStep(session) {
         min: 1,
         sec: 8,
       });
-    case STEP.TITLE:
+    case STEP.RECORD:
       return readRecord(
-        t("הקליטי בקצרה את כותרת המשימה ולסיום הקישי סולמית"),
-        v(STEP.TITLE),
-      );
-    case STEP.DESC:
-      return readRecord(
-        t("הקליטי פרטים נוספים למשימה אם אין פרטים נוספים הקישי סולמית"),
-        v(STEP.DESC),
-      );
-    case STEP.DATE_CHOICE:
-      return readTap(
         t(
-          "לתאריך יעד להיום הקישי 1 למחר הקישי 2 לבחירת תאריך הקישי 3 ללא תאריך הקישי 4",
+          "אמרי במשפט אחד את שם המטופלת משך השעות והגדרת המשימה ולסיום הקישי סולמית",
         ),
-        v(STEP.DATE_CHOICE),
-        { max: 1, min: 1 },
+        varName(STEP.RECORD, session.attempt),
       );
-    case STEP.DATE_MANUAL:
-      return readTap(
-        t("הקישי תאריך בספרות יום חודש ושנה שמונה ספרות ולסיום הקישי סולמית"),
-        v(STEP.DATE_MANUAL),
-        { max: 8, min: 8 },
+    case STEP.CONFIRM: {
+      const d = session.data || {};
+      const messages = [t("המשימה שהוקלטה היא")];
+      if (d.rec) messages.push(f(d.rec));
+      messages.push(
+        t("לשמירה הקישי 1 להקלטה מחדש הקישי 2 לביטול הקישי 3"),
       );
-    case STEP.TIME_CHOICE:
-      return readTap(
-        t("לשעת יעד להקלדת שעה הקישי 1 ללא שעה הקישי 2"),
-        v(STEP.TIME_CHOICE),
-        { max: 1, min: 1 },
-      );
-    case STEP.TIME_MANUAL:
-      return readTap(
-        t("הקישי שעה בספרות שעות ודקות ארבע ספרות ולסיום הקישי סולמית"),
-        v(STEP.TIME_MANUAL),
-        { max: 4, min: 4 },
-      );
-    case STEP.PRIORITY:
-      return readTap(
-        t("לעדיפות רגילה הקישי 1 לעדיפות גבוהה הקישי 2 לעדיפות דחופה הקישי 3"),
-        v(STEP.PRIORITY),
-        { max: 1, min: 1 },
-      );
-    case STEP.LINK_CHOICE:
-      return readTap(
-        t("לשיוך המשימה ללא שיוך הקישי 1 לשיוך לתיק קיים הקישי 2"),
-        v(STEP.LINK_CHOICE),
-        { max: 1, min: 1 },
-      );
-    case STEP.PATIENT_KEY:
-      return readTap(
-        t("הקישי את מספר המזהה או הטלפון של המטופלת ולסיום הקישי סולמית"),
-        v(STEP.PATIENT_KEY),
-        { max: 20, min: 1 },
-      );
-    case STEP.CONFIRM:
-      return renderConfirm(session);
+      return readTap(messages, varName(STEP.CONFIRM, session.attempt), {
+        max: 1,
+        min: 1,
+        sec: 10,
+      });
+    }
     default:
       return sayAndHangup(t("תודה רבה ולהתראות"));
   }
 }
 
-// The confirmation summary: plays the recorded title, then reads the choice.
-function renderConfirm(session) {
-  const d = session.data || {};
-  const dateTxt = dueDateText(d.date_choice, d.date_manual);
-  const prioTxt = priorityText(d.priority);
-  const messages = [t("המשימה היא")];
-  if (d.title_rec) messages.push(f(d.title_rec));
-  messages.push(
-    t(
-      `לתאריך ${dateTxt} בעדיפות ${prioTxt} לשמירה הקישי 1 להקלטה מחדש הקישי 2 לביטול הקישי 3`,
-    ),
-  );
-  return readTap(messages, varName(STEP.CONFIRM, session.attempt), {
-    max: 1,
-    min: 1,
-    sec: 10,
-  });
+// Match a patient by the name spoken in the transcript. Returns the patient id
+// and the matched full name, or nulls. Picks the longest full_name that occurs
+// in the transcript (most specific match).
+async function matchPatientByName(supabase, transcript) {
+  const norm = normHeb(transcript);
+  if (!norm) return { patientId: null, matchedName: null };
+  const { data, error } = await supabase.from("patients").select("id, full_name");
+  if (error || !Array.isArray(data)) return { patientId: null, matchedName: null };
+  let best = null;
+  for (const p of data) {
+    const fn = normHeb(p.full_name);
+    if (fn && norm.includes(fn)) {
+      if (!best || fn.length > best.len) {
+        best = { id: p.id, name: p.full_name, len: fn.length };
+      }
+    }
+  }
+  return best
+    ? { patientId: best.id, matchedName: best.name }
+    : { patientId: null, matchedName: null };
 }
 
-// Resolve a patient by the digits the caller typed (matched against phone).
-// Returns { patient_id, matched } — patient_id null if not exactly resolvable.
-async function resolvePatient(supabase, key) {
-  const digits = digitsOnly(key);
-  if (!digits) return { patient_id: null, matched: false };
-  const { data, error } = await supabase
-    .from("patients")
-    .select("id, phone")
-    .not("phone", "is", null);
-  if (error || !Array.isArray(data)) return { patient_id: null, matched: false };
-  const matches = data.filter((p) => {
-    const pd = digitsOnly(p.phone);
-    return pd && (pd === digits || pd.endsWith(digits) || digits.endsWith(pd));
-  });
-  if (matches.length === 1) return { patient_id: matches[0].id, matched: true };
-  return { patient_id: null, matched: false };
-}
-
-// Create the task from the confirmed session. Idempotent on call_external_id.
+// Create the task from the confirmed recording. Idempotent on call_external_id.
 async function createTask(supabase, session, callId, phone) {
   const d = session.data || {};
 
-  // Already created for this call? (session bookkeeping or unique key)
   if (session.task_id) return { ok: true, taskId: session.task_id };
   const existing = await supabase
     .from("tasks")
@@ -185,39 +148,53 @@ async function createTask(supabase, session, callId, phone) {
     .maybeSingle();
   if (existing.data?.id) return { ok: true, taskId: existing.data.id };
 
-  // Patient link (optional).
+  const transcript = (d.transcript || "").trim();
+
+  // Identify patient by spoken name (best-effort).
   let patientId = null;
-  let unresolvedKey = null;
-  if (String(d.link_choice) === "2" && d.patient_key) {
-    const r = await resolvePatient(supabase, d.patient_key);
-    patientId = r.patient_id;
-    if (!r.matched) unresolvedKey = digitsOnly(d.patient_key);
+  let matchedName = null;
+  if (transcript) {
+    const m = await matchPatientByName(supabase, transcript);
+    patientId = m.patientId;
+    matchedName = m.matchedName;
   }
 
-  // Title / description: use transcription text if the IVR provided any,
-  // otherwise fall back to a placeholder and rely on the recording.
-  const titleText = (d.title_text || "").trim();
-  const descText = (d.desc_text || "").trim();
+  // Duration → hours (do not block the save if it can't be parsed).
+  const hours = transcript ? parseHebrewDuration(transcript) : null;
 
+  // Task definition: the transcript with the matched patient name removed
+  // (so the definition reads cleanly); fall back to the full transcript, or a
+  // placeholder when there is no transcript at all.
+  let taskDefinition;
+  if (transcript) {
+    let def = transcript;
+    if (matchedName) {
+      def = def.replace(new RegExp(escapeRegex(matchedName), "g"), " ").trim();
+    }
+    def = def.replace(/\s+/g, " ").trim();
+    taskDefinition = def.length >= 2 ? def : transcript;
+  } else {
+    taskDefinition = d.rec ? TASK_PLACEHOLDER : null;
+  }
+
+  // If the patient wasn't identified, keep the spoken text so it can be linked
+  // and edited by hand later.
   const otherNotes = [];
-  if (d.desc_rec && !descText)
-    otherNotes.push(`הקלטת תיאור: ${d.desc_rec}`);
-  if (unresolvedKey)
-    otherNotes.push(`מספר שהוקש לשיוך (לא זוהה אוטומטית): ${unresolvedKey}`);
+  if (!patientId) {
+    otherNotes.push(
+      `מהטלפון - לא זוהתה מטופלת. נאמר: ${transcript || "(אין תמלול - יש להאזין להקלטה)"}`,
+    );
+  }
 
   const payload = {
-    task_definition: titleText || (d.title_rec ? TITLE_PLACEHOLDER : null),
-    call_details: descText || (d.desc_rec ? DESC_PLACEHOLDER : null),
-    date_gregorian: resolveDueDate(d.date_choice, d.date_manual),
-    start_time:
-      String(d.time_choice) === "1" ? parseManualTime(d.time_manual) : null,
-    priority: priorityText(d.priority),
+    task_definition: taskDefinition,
+    hours: hours != null ? hours : null,
     status: "פתוח",
     patient_id: patientId,
     source: "phone",
     caller_phone: phone || session.caller_phone || null,
-    recording_url: d.title_rec || null,
-    transcription: titleText || null,
+    recording_url: d.rec || null,
+    transcription: transcript || null,
     other_details: otherNotes.length ? otherNotes.join(" | ") : null,
     call_external_id: callId,
   };
@@ -229,7 +206,6 @@ async function createTask(supabase, session, callId, phone) {
     .single();
 
   if (error) {
-    // Unique-violation → another concurrent request already created it.
     if (error.code === "23505") {
       const again = await supabase
         .from("tasks")
@@ -279,8 +255,6 @@ async function handle(request) {
   const params = await parseYemotParams(request);
 
   // --- Auth (fail-closed) — checked before anything else ---
-  // If the secret is not configured on the server, refuse every request (503).
-  // The endpoint must never be open just because the env var is missing.
   const expected = process.env.YEMOT_IVR_TOKEN;
   if (!expected) {
     console.error(
@@ -288,13 +262,12 @@ async function handle(request) {
     );
     return textResponse(sayAndHangup(t("המערכת אינה זמינה כעת")), 503);
   }
-  // Missing or wrong token → 401.
   if (!params.token || params.token !== expected) {
     console.warn("[yemot-ivr] rejected request: missing/invalid token");
     return textResponse(sayAndHangup(t("שגיאת הרשאה לא ניתן להמשיך")), 401);
   }
 
-  // Call hang-up notification from Yemot — nothing to do, no partial task.
+  // Hang-up notification — nothing to do, no partial task.
   if (params.hangup === "yes" || params.ApiHangup === "yes") {
     return textResponse("");
   }
@@ -316,22 +289,19 @@ async function handle(request) {
 
   const session = await loadSession(supabase, callId, phone);
 
-  // If the call already finished, just hang up cleanly.
   if (session.step === STEP.DONE) {
     return textResponse(sayAndHangup(t("תודה רבה ולהתראות")));
   }
 
-  // Did Yemot send the value for the step we're waiting on?
   const expectedVar = varName(session.step, session.attempt);
   const incoming = params[expectedVar];
 
   if (incoming !== undefined) {
     const value = String(incoming);
-    const advanceResult = await applyInput(supabase, session, value, callId, phone);
-    if (advanceResult) {
-      // Terminal response (save / cancel) produced directly.
+    const terminal = await applyInput(supabase, session, value, params, callId, phone);
+    if (terminal) {
       await saveSession(supabase, session);
-      return textResponse(advanceResult);
+      return textResponse(terminal);
     }
     await saveSession(supabase, session);
   }
@@ -339,69 +309,25 @@ async function handle(request) {
   return textResponse(renderStep(session));
 }
 
-// Mutates `session` based on the caller's input for the current step.
-// Returns a terminal response string when the call should end, else null.
-async function applyInput(supabase, session, value, callId, phone) {
+// Mutates `session` based on the caller's input. Returns a terminal response
+// string when the call should end, else null.
+async function applyInput(supabase, session, value, params, callId, phone) {
   const d = session.data || (session.data = {});
   const v = value.trim();
 
   switch (session.step) {
     case STEP.START:
       if (v === "1") {
-        session.step = STEP.TITLE;
+        session.step = STEP.RECORD;
       } else {
         session.step = STEP.DONE;
         return sayAndHangup(t("לא נבחרה אפשרות תקינה להתראות"));
       }
       break;
 
-    case STEP.TITLE:
-      d.title_rec = v;
-      session.step = STEP.DESC;
-      break;
-
-    case STEP.DESC:
-      d.desc_rec = v && v !== "0" ? v : "";
-      session.step = STEP.DATE_CHOICE;
-      break;
-
-    case STEP.DATE_CHOICE:
-      d.date_choice = v;
-      session.step = v === "3" ? STEP.DATE_MANUAL : STEP.TIME_CHOICE;
-      break;
-
-    case STEP.DATE_MANUAL:
-      if (parseManualDate(v)) {
-        d.date_manual = v;
-        session.step = STEP.TIME_CHOICE;
-      }
-      // invalid → stay on this step and re-prompt
-      break;
-
-    case STEP.TIME_CHOICE:
-      d.time_choice = v;
-      session.step = v === "1" ? STEP.TIME_MANUAL : STEP.PRIORITY;
-      break;
-
-    case STEP.TIME_MANUAL:
-      if (parseManualTime(v)) {
-        d.time_manual = v;
-        session.step = STEP.PRIORITY;
-      }
-      break;
-
-    case STEP.PRIORITY:
-      d.priority = ["1", "2", "3"].includes(v) ? v : "1";
-      session.step = STEP.LINK_CHOICE;
-      break;
-
-    case STEP.LINK_CHOICE:
-      d.link_choice = v;
-      session.step = v === "2" ? STEP.PATIENT_KEY : STEP.CONFIRM;
-      break;
-
-    case STEP.PATIENT_KEY:
-      d.patient_key = v;
+    case STEP.RECORD:
+      d.rec = v;
+      d.transcript = pickTranscription(params, varName(STEP.RECORD, session.attempt));
       session.step = STEP.CONFIRM;
       break;
 
@@ -411,20 +337,16 @@ async function applyInput(supabase, session, value, callId, phone) {
         session.step = STEP.DONE;
         if (res.ok) {
           session.task_id = res.taskId;
-          console.log(
-            `[yemot-ivr] task created call=${callId} task=${res.taskId}`,
-          );
+          console.log(`[yemot-ivr] task created call=${callId} task=${res.taskId}`);
           return sayAndHangup(t("המשימה נשמרה בהצלחה תודה ולהתראות"));
         }
         console.error(`[yemot-ivr] task save failed call=${callId}`);
-        return sayAndHangup(
-          t("אירעה שגיאה בשמירת המשימה אנא נסי שוב מאוחר יותר"),
-        );
+        return sayAndHangup(t("אירעה שגיאה בשמירת המשימה אנא נסי שוב מאוחר יותר"));
       } else if (v === "2") {
-        // Re-record: bump attempt (so echoed vars don't shadow) and restart.
+        // Re-record: bump attempt (avoid echoed-var shadowing) and restart.
         session.attempt += 1;
         session.data = {};
-        session.step = STEP.TITLE;
+        session.step = STEP.RECORD;
       } else if (v === "3") {
         session.step = STEP.DONE;
         return sayAndHangup(t("המשימה בוטלה להתראות"));
