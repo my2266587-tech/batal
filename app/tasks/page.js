@@ -24,6 +24,7 @@ import * as XLSX from "xlsx";
 
 const MEETING_TYPES = ["פרונטלית", "טלפונית", "וידאו", "ביקור בית", "אחר"];
 const STATUSES = ["פתוח", "בוצע", "בוטל"];
+const PRIORITIES = ["רגילה", "גבוהה", "דחופה"];
 const ATTENDANCE = ["נוכח", "לא נוכח", "ביטל", "דחה"];
 const PAYMENT_STATUSES = ["לא שולם", "שולם חלקית", "שולם", "לא לחיוב"];
 const REMINDER_OPTIONS = [
@@ -52,6 +53,7 @@ const emptyForm = {
   documents_url: "",
   total_before_discount: "",
   total_after_discount: "",
+  priority: "רגילה",
   status: "פתוח",
   payment_status: "לא שולם",
   is_future: false,
@@ -183,6 +185,28 @@ function PaymentBadge({ status, onClick }) {
   return <span className={cls}>{status || "—"}</span>;
 }
 
+function PriorityBadge({ priority }) {
+  const map = {
+    "דחופה": "badge-danger",
+    "גבוהה": "badge-warning",
+    "רגילה": "badge-neutral",
+  };
+  const cls = map[priority] || "badge-neutral";
+  return <span className={cls}>{priority || "רגילה"}</span>;
+}
+
+// Small tag marking tasks that were created through the phone (Yemot IVR).
+function PhoneTag() {
+  return (
+    <span
+      className="badge-neutral inline-flex items-center gap-1"
+      title="נוצר דרך הטלפון"
+    >
+      📞 מהטלפון
+    </span>
+  );
+}
+
 function DetailField({ label, value }) {
   return (
     <div>
@@ -239,6 +263,10 @@ function TaskDetails({ task }) {
           value={formatCurrency(task.travel_payment)}
         />
         <DetailField
+          label="עדיפות"
+          value={<PriorityBadge priority={task.priority} />}
+        />
+        <DetailField
           label="סטטוס פגישה"
           value={<StatusBadge status={task.status} />}
         />
@@ -263,6 +291,45 @@ function TaskDetails({ task }) {
         <DetailBlock label="פירוט מייל" text={task.email_details} />
         <DetailBlock label="פירוט אחר" text={task.other_details} />
       </div>
+
+      {task.source === "phone" && (
+        <div className="card p-4 border-sky-200 bg-sky-50 text-sm space-y-3">
+          <div className="font-semibold text-sky-900 flex items-center gap-2">
+            📞 משימה שנוצרה דרך הטלפון
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <DetailField
+              label="מספר מתקשר"
+              value={
+                task.caller_phone ? (
+                  <a
+                    href={`tel:${task.caller_phone}`}
+                    className="text-accent-700 hover:underline"
+                  >
+                    {task.caller_phone}
+                  </a>
+                ) : null
+              }
+            />
+            {task.recording_url && (
+              <div>
+                <div className="text-xs text-ink-500 mb-0.5">הקלטה</div>
+                <a
+                  href={task.recording_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-sm text-accent-700 hover:underline font-medium"
+                >
+                  🎧 האזנה להקלטה
+                </a>
+              </div>
+            )}
+          </div>
+          {task.transcription && (
+            <DetailBlock label="תמלול" text={task.transcription} />
+          )}
+        </div>
+      )}
 
       {task.is_future && (
         <div className="card p-4 border-sky-200 bg-sky-50 text-sm">
@@ -485,6 +552,7 @@ export default function TasksPage() {
       documents_url: t.documents_url || "",
       total_before_discount: t.total_before_discount ?? "",
       total_after_discount: t.total_after_discount ?? "",
+      priority: t.priority || "רגילה",
       status: t.status || "פתוח",
       payment_status: t.payment_status || "לא שולם",
       is_future: !!t.is_future,
@@ -544,6 +612,7 @@ export default function TasksPage() {
       documents_url: form.documents_url || null,
       total_before_discount: toNumber(form.total_before_discount),
       total_after_discount: toNumber(form.total_after_discount),
+      priority: form.priority || "רגילה",
       status: form.status || "פתוח",
       payment_status: form.payment_status || "לא שולם",
       is_future: !!form.is_future,
@@ -1115,6 +1184,20 @@ export default function TasksPage() {
             />
           </div>
           <div>
+            <label className="label">עדיפות</label>
+            <select
+              className="input"
+              value={form.priority}
+              onChange={(e) => update("priority", e.target.value)}
+            >
+              {PRIORITIES.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
             <label className="label">סטטוס פגישה</label>
             <select
               className="input"
@@ -1446,12 +1529,20 @@ export default function TasksPage() {
                         )}
                       </td>
                       <td className="font-medium">
-                        {patientNameById[t.patient_id] || "—"}
+                        <div className="flex flex-col gap-1 items-start">
+                          <span>{patientNameById[t.patient_id] || "—"}</span>
+                          {t.source === "phone" && <PhoneTag />}
+                        </div>
                       </td>
                       <td className="max-w-xs">
                         <div className="line-clamp-2 text-sm whitespace-pre-wrap">
                           {t.task_definition || "—"}
                         </div>
+                        {t.priority && t.priority !== "רגילה" && (
+                          <div className="mt-1">
+                            <PriorityBadge priority={t.priority} />
+                          </div>
+                        )}
                       </td>
                       <td>{t.meeting_type || "—"}</td>
                       <td>{formatDecimalHoursAsHHMM(t.hours)}</td>

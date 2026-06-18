@@ -55,6 +55,30 @@ create table if not exists tasks (
 create index if not exists tasks_patient_idx on tasks (patient_id);
 create index if not exists tasks_date_idx on tasks (date_gregorian desc);
 
+-- מיגרציה: שדות למשימות שנוצרות דרך הטלפון (ימות המשיח). בטוח להרצה חוזרת.
+alter table tasks add column if not exists priority text default 'רגילה';
+alter table tasks add column if not exists source text;
+alter table tasks add column if not exists caller_phone text;
+alter table tasks add column if not exists recording_url text;
+alter table tasks add column if not exists transcription text;
+alter table tasks add column if not exists call_external_id text;
+create unique index if not exists tasks_call_external_id_key
+  on tasks (call_external_id) where call_external_id is not null;
+
+-- טבלת מצב שיחה זמנית (IVR) — אחסון זמני של שלבי השיחה עד לאישור.
+-- שורה כאן אינה משימה; משימה נוצרת בטבלת tasks רק בעת אישור.
+create table if not exists ivr_sessions (
+  call_id text primary key,
+  caller_phone text,
+  step int not null default 1,
+  attempt int not null default 1,
+  data jsonb not null default '{}'::jsonb,
+  task_id uuid references tasks(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists ivr_sessions_updated_idx on ivr_sessions (updated_at desc);
+
 -- =========================================
 -- קופה / רישום כספים
 -- =========================================
@@ -76,6 +100,7 @@ create index if not exists cash_records_date_idx on cash_records (date desc);
 alter table patients enable row level security;
 alter table tasks enable row level security;
 alter table cash_records enable row level security;
+alter table ivr_sessions enable row level security;
 
 drop policy if exists "patients_all" on patients;
 create policy "patients_all" on patients for all using (true) with check (true);
@@ -85,3 +110,6 @@ create policy "tasks_all" on tasks for all using (true) with check (true);
 
 drop policy if exists "cash_all" on cash_records;
 create policy "cash_all" on cash_records for all using (true) with check (true);
+
+drop policy if exists "ivr_sessions_all" on ivr_sessions;
+create policy "ivr_sessions_all" on ivr_sessions for all using (true) with check (true);
