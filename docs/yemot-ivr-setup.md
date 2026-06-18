@@ -51,7 +51,7 @@ https://<הדומיין-שלך>/api/ivr/yemot?token=<YEMOT_IVR_TOKEN>
 
 | משתנה | תיאור |
 |-------|-------|
-| `YEMOT_IVR_TOKEN` | סוד משותף. ימות חייב לשלוח אותו בפרמטר `token`. אם חסר — הנתיב פתוח (לא מומלץ בפרודקשן). |
+| `YEMOT_IVR_TOKEN` | **חובה** (fail-closed). סוד משותף שימות שולח בפרמטר `token`. אם המשתנה חסר בשרת — הנתיב מסרב לכל בקשה (503). token חסר/שגוי → 401. |
 | `SUPABASE_URL` | כתובת פרויקט ה-Supabase (אפשר ליפול חזרה ל-`NEXT_PUBLIC_SUPABASE_URL`). |
 | `SUPABASE_ANON_KEY` | מפתח anon בלבד — **לא** service_role (אפשר ליפול חזרה ל-`NEXT_PUBLIC_SUPABASE_ANON_KEY`). |
 

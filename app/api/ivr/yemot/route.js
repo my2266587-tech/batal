@@ -46,9 +46,9 @@ const STEP = {
 const TITLE_PLACEHOLDER = "🎤 משימה מהטלפון - יש להאזין להקלטה";
 const DESC_PLACEHOLDER = "🎤 תיאור מוקלט - יש להאזין להקלטה";
 
-function textResponse(body) {
+function textResponse(body, status = 200) {
   return new Response(body, {
-    status: 200,
+    status,
     headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
 }
@@ -278,22 +278,25 @@ async function saveSession(supabase, session) {
 async function handle(request) {
   const params = await parseYemotParams(request);
 
+  // --- Auth (fail-closed) — checked before anything else ---
+  // If the secret is not configured on the server, refuse every request (503).
+  // The endpoint must never be open just because the env var is missing.
+  const expected = process.env.YEMOT_IVR_TOKEN;
+  if (!expected) {
+    console.error(
+      "[yemot-ivr] YEMOT_IVR_TOKEN is not configured — refusing all requests (fail-closed)",
+    );
+    return textResponse(sayAndHangup(t("המערכת אינה זמינה כעת")), 503);
+  }
+  // Missing or wrong token → 401.
+  if (!params.token || params.token !== expected) {
+    console.warn("[yemot-ivr] rejected request: missing/invalid token");
+    return textResponse(sayAndHangup(t("שגיאת הרשאה לא ניתן להמשיך")), 401);
+  }
+
   // Call hang-up notification from Yemot — nothing to do, no partial task.
   if (params.hangup === "yes" || params.ApiHangup === "yes") {
     return textResponse("");
-  }
-
-  // Auth: require a shared token if configured (Yemot sends it as a param).
-  const expected = process.env.YEMOT_IVR_TOKEN;
-  if (expected) {
-    if (params.token !== expected) {
-      console.warn("[yemot-ivr] rejected request: bad/missing token");
-      return textResponse(sayAndHangup(t("שגיאת הרשאה לא ניתן להמשיך")));
-    }
-  } else {
-    console.warn(
-      "[yemot-ivr] YEMOT_IVR_TOKEN is not set — endpoint is unauthenticated",
-    );
   }
 
   const supabase = getServerSupabase();
