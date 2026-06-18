@@ -95,7 +95,7 @@ export default function CalendarPage() {
     (async () => {
       const { data } = await supabase
         .from("patients")
-        .select("id, full_name")
+        .select("id, full_name, hourly_rate, hourly_rate_discounted")
         .order("full_name");
       setPatients(data || []);
     })();
@@ -282,6 +282,57 @@ export default function CalendarPage() {
     setError("");
   }
 
+  // Build a task payload mirroring the calendar event, with hours and
+  // totals computed from the patient's rate. Returns null if no mirror
+  // should be created (no patient_id).
+  function buildMirrorTaskPayload(eventForm) {
+    if (!eventForm.patient_id) return null;
+    const start = eventForm.all_day ? null : eventForm.start_time || null;
+    const end = eventForm.all_day ? null : eventForm.end_time || null;
+
+    let minutes = 0;
+    if (start && end) {
+      const [sh, sm] = start.split(":").map(Number);
+      const [eh, em] = end.split(":").map(Number);
+      let sMin = sh * 60 + sm;
+      let eMin = eh * 60 + em;
+      if (eMin < sMin) eMin += 24 * 60;
+      minutes = eMin - sMin;
+    }
+    const hours = minutes > 0 ? Math.round((minutes / 60) * 100) / 100 : 0;
+
+    const patient = patients.find((p) => p.id === eventForm.patient_id);
+    let totalBefore = 0;
+    let totalAfter = 0;
+    if (patient && hours > 0) {
+      const rate = Number(patient.hourly_rate) || 0;
+      const rateDisc =
+        patient.hourly_rate_discounted != null
+          ? Number(patient.hourly_rate_discounted)
+          : rate;
+      totalBefore = Math.round(hours * rate * 100) / 100;
+      totalAfter =
+        Math.round(hours * (Number.isFinite(rateDisc) ? rateDisc : rate) * 100) /
+        100;
+    }
+
+    const taskDef = eventForm.title.trim()
+      + (eventForm.description ? "\n" + eventForm.description : "");
+
+    return {
+      patient_id: eventForm.patient_id,
+      date_gregorian: eventForm.event_date,
+      start_time: start,
+      end_time: end,
+      hours,
+      task_definition: taskDef,
+      total_before_discount: totalBefore,
+      total_after_discount: totalAfter,
+      status: "פתוח",
+      payment_status: "לא שולם",
+    };
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (!form.title.trim()) {
@@ -315,11 +366,36 @@ export default function CalendarPage() {
     } else {
       res = await supabase.from("calendar_events").insert([payload]);
     }
-    setSaving(false);
     if (res.error) {
+      setSaving(false);
       setError(res.error.message);
       return;
     }
+
+    // On NEW event linked to a patient — also create a row in tasks so it
+    // shows up in /tasks. Failure here is logged but does not block the
+    // calendar event (which is already saved).
+    if (!editingId && form.patient_id) {
+      const taskPayload = buildMirrorTaskPayload(form);
+      if (taskPayload) {
+        const { error: taskErr } = await supabase
+          .from("tasks")
+          .insert([taskPayload]);
+        if (taskErr) {
+          console.error("[calendar] mirror task failed:", taskErr);
+          setSaving(false);
+          alert(
+            "האירוע נשמר אך יצירת השורה ב-'ניהול משימות' נכשלה:\n\n" +
+              (taskErr.message || JSON.stringify(taskErr)),
+          );
+          closeModal();
+          calendarRef.current?.getApi()?.refetchEvents();
+          return;
+        }
+      }
+    }
+
+    setSaving(false);
     closeModal();
     calendarRef.current?.getApi()?.refetchEvents();
   }
@@ -574,6 +650,11 @@ export default function CalendarPage() {
                     </option>
                   ))}
                 </select>
+                {!editingId && form.patient_id && (
+                  <p className="text-[11px] text-ink-500 mt-1">
+                    בעת שמירה תיווצר אוטומטית גם שורה ב"ניהול משימות".
+                  </p>
+                )}
               </div>
               <div>
                 <label className="label">עדיפות</label>
