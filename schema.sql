@@ -64,6 +64,10 @@ alter table tasks add column if not exists transcription text;
 alter table tasks add column if not exists call_external_id text;
 create unique index if not exists tasks_call_external_id_key
   on tasks (call_external_id) where call_external_id is not null;
+-- מצב טיפול למשימות מהטלפון: pending / needs_patient / approved (ריק לשאר).
+alter table tasks add column if not exists phone_status text;
+create index if not exists tasks_phone_status_idx
+  on tasks (phone_status) where phone_status is not null;
 
 -- טבלת מצב שיחה זמנית (IVR) — אחסון זמני של שלבי השיחה עד לאישור.
 -- שורה כאן אינה משימה; משימה נוצרת בטבלת tasks רק בעת אישור.

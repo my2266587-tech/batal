@@ -197,13 +197,27 @@ async function createTask(supabase, session, callId, phone) {
     transcription: transcript || null,
     other_details: otherNotes.length ? otherNotes.join(" | ") : null,
     call_external_id: callId,
+    // Phone-call review state: linked → awaiting approval; otherwise needs a patient.
+    phone_status: patientId ? "pending" : "needs_patient",
   };
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("tasks")
     .insert([payload])
     .select("id")
     .single();
+
+  // Graceful degrade: if the phone_status column hasn't been migrated yet,
+  // retry without it so a call is never lost (review state falls back to
+  // patient_id on the inbox screen).
+  if (error && /phone_status/.test(error.message || "")) {
+    const { phone_status, ...rest } = payload; // eslint-disable-line no-unused-vars
+    ({ data, error } = await supabase
+      .from("tasks")
+      .insert([rest])
+      .select("id")
+      .single());
+  }
 
   if (error) {
     if (error.code === "23505") {
