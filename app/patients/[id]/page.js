@@ -185,6 +185,7 @@ export default function PatientCardPage() {
   const [docs, setDocs] = useState([]);
   const [linkedContacts, setLinkedContacts] = useState([]);
   const [allContacts, setAllContacts] = useState([]);
+  const [upcomingEvents, setUpcomingEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -216,7 +217,7 @@ export default function PatientCardPage() {
 
   async function loadAll() {
     setLoading(true);
-    const [pRes, tRes, dRes, pcRes, cRes] = await Promise.all([
+    const [pRes, tRes, dRes, pcRes, cRes, eRes] = await Promise.all([
       supabase.from("patients").select("*").eq("id", id).maybeSingle(),
       supabase
         .from("tasks")
@@ -236,6 +237,15 @@ export default function PatientCardPage() {
         .eq("patient_id", id)
         .order("created_at", { ascending: false }),
       supabase.from("contacts").select("*").order("full_name"),
+      supabase
+        .from("calendar_events")
+        .select("*")
+        .eq("patient_id", id)
+        .neq("status", "cancelled")
+        .gte("event_date", new Date().toISOString().slice(0, 10))
+        .order("event_date", { ascending: true })
+        .order("start_time", { ascending: true, nullsFirst: false })
+        .limit(20),
     ]);
     if (pRes.error) setError(pRes.error.message);
     if (tRes.error) setError(tRes.error.message);
@@ -247,6 +257,7 @@ export default function PatientCardPage() {
     setDocs(dRes.data || []);
     setLinkedContacts(pcRes.data || []);
     setAllContacts(cRes.data || []);
+    setUpcomingEvents(eRes.data || []);
     setLoading(false);
   }
 
@@ -708,6 +719,61 @@ export default function PatientCardPage() {
           <div className="stat-value">{formatCurrency(totals.unpaid)}</div>
         </div>
       </section>
+
+      {upcomingEvents.length > 0 && (
+        <section className="card">
+          <div className="px-6 py-5 border-b border-line flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h2 className="section-title">אירועים קרובים</h2>
+              <p className="text-xs text-ink-500 mt-0.5">
+                מתוך לוח השנה — משויכים למטופלת זו
+              </p>
+            </div>
+            <Link
+              href="/calendar"
+              className="text-sm text-accent-700 hover:underline"
+            >
+              לכל לוח השנה ←
+            </Link>
+          </div>
+          <ul className="divide-y divide-line">
+            {upcomingEvents.map((ev) => {
+              const isOverdue =
+                ev.event_date < new Date().toISOString().slice(0, 10) &&
+                ev.status !== "completed";
+              return (
+                <li key={ev.id} className="px-6 py-3 flex items-center gap-3">
+                  <div className="text-sm text-ink-500 whitespace-nowrap min-w-[100px]">
+                    {formatDate(ev.event_date)}
+                    {ev.start_time && (
+                      <span className="mr-1">
+                        {String(ev.start_time).slice(0, 5)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-medium text-ink-900">{ev.title}</div>
+                    {ev.description && (
+                      <div className="text-xs text-ink-500 line-clamp-1">
+                        {ev.description}
+                      </div>
+                    )}
+                  </div>
+                  {isOverdue && (
+                    <span className="badge-danger">באיחור</span>
+                  )}
+                  {ev.priority === "urgent" && (
+                    <span className="badge-warning">דחוף</span>
+                  )}
+                  {ev.status === "completed" && (
+                    <span className="badge-success">הושלם</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       <TasksSection
         title="משימות לא שולמו"

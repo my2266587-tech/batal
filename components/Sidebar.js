@@ -8,6 +8,7 @@ import { supabase, supabaseReady } from "@/lib/supabaseClient";
 const links = [
   { href: "/patients", label: "מטופלים" },
   { href: "/tasks", label: "ניהול משימות" },
+  { href: "/calendar", label: "לוח שנה" },
   { href: "/documents", label: "מסמכים" },
   { href: "/contacts", label: "גורמי קשר" },
   { href: "/summary", label: "סיכום שעות ותשלום לפי מטופל" },

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import {
@@ -9,9 +10,68 @@ import {
   formatDecimalHoursAsHHMM,
 } from "@/lib/format";
 
+function EventsList({ title, items, patientNameById, tone }) {
+  const toneClass =
+    tone === "overdue"
+      ? "border-red-200 bg-red-50"
+      : tone === "today"
+        ? "border-accent-200 bg-accent-50"
+        : "border-line bg-white";
+  const titleClass =
+    tone === "overdue"
+      ? "text-red-800"
+      : tone === "today"
+        ? "text-accent-700"
+        : "text-ink-900";
+  return (
+    <div className={`card border ${toneClass}`}>
+      <div className="px-5 py-4 border-b border-line flex items-center justify-between">
+        <h3 className={`section-title text-base ${titleClass}`}>{title}</h3>
+        <Link
+          href="/calendar"
+          className="text-xs text-accent-700 hover:underline"
+        >
+          לוח השנה ←
+        </Link>
+      </div>
+      {items.length === 0 ? (
+        <p className="p-5 text-sm text-ink-500">אין אירועים</p>
+      ) : (
+        <ul className="divide-y divide-line">
+          {items.map((ev) => (
+            <li key={ev.id} className="px-5 py-3 text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium text-ink-900 flex-1 line-clamp-1">
+                  {ev.title}
+                </span>
+                {ev.priority === "urgent" && (
+                  <span className="badge-warning">דחוף</span>
+                )}
+              </div>
+              <div className="text-xs text-ink-500 mt-0.5">
+                {(() => {
+                  const [y, m, d] = String(ev.event_date)
+                    .slice(0, 10)
+                    .split("-");
+                  return `${d}/${m}/${y}`;
+                })()}
+                {ev.start_time && ` · ${String(ev.start_time).slice(0, 5)}`}
+                {ev.patient_id && patientNameById[ev.patient_id] && (
+                  <> · {patientNameById[ev.patient_id]}</>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function SummaryPage() {
   const [tasks, setTasks] = useState([]);
   const [patients, setPatients] = useState([]);
+  const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
 
@@ -21,7 +81,14 @@ export default function SummaryPage() {
         setLoading(false);
         return;
       }
-      const [tRes, pRes] = await Promise.all([
+      // Pull calendar events from 30 days back to 14 days ahead — that's
+      // enough for today / upcoming / overdue without loading everything.
+      const today = new Date();
+      const from = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const to = new Date(today.getTime() + 14 * 24 * 60 * 60 * 1000);
+      const fromYMD = from.toISOString().slice(0, 10);
+      const toYMD = to.toISOString().slice(0, 10);
+      const [tRes, pRes, eRes] = await Promise.all([
         supabase
           .from("tasks")
           .select("*")
@@ -32,9 +99,17 @@ export default function SummaryPage() {
           .from("patients")
           .select("id, full_name, status")
           .order("full_name"),
+        supabase
+          .from("calendar_events")
+          .select("*")
+          .gte("event_date", fromYMD)
+          .lte("event_date", toYMD)
+          .order("event_date", { ascending: true })
+          .order("start_time", { ascending: true, nullsFirst: false }),
       ]);
       setTasks(tRes.data || []);
       setPatients(pRes.data || []);
+      setEvents(eRes.data || []);
       setLoading(false);
     }
     load();
@@ -45,6 +120,30 @@ export default function SummaryPage() {
     patients.forEach((p) => (m[p.id] = p.full_name));
     return m;
   }, [patients]);
+
+  const todayYMD = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  const todayEvents = useMemo(
+    () => events.filter((e) => e.event_date === todayYMD && e.status !== "cancelled"),
+    [events, todayYMD],
+  );
+  const overdueEvents = useMemo(
+    () =>
+      events.filter(
+        (e) => e.event_date < todayYMD && e.status === "pending",
+      ),
+    [events, todayYMD],
+  );
+  const upcomingEvents = useMemo(
+    () =>
+      events.filter(
+        (e) =>
+          e.event_date > todayYMD &&
+          e.status !== "cancelled" &&
+          e.status !== "completed",
+      ),
+    [events, todayYMD],
+  );
 
   const activePatients = useMemo(
     () =>
@@ -135,6 +234,31 @@ export default function SummaryPage() {
         <h1 className="page-title">סיכום שעות ותשלום לפי מטופל</h1>
         <p className="page-subtitle">פירוט שעות ותשלומים מצטברים לכל מטופל.</p>
       </header>
+
+      {(todayEvents.length > 0 ||
+        overdueEvents.length > 0 ||
+        upcomingEvents.length > 0) && (
+        <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-5">
+          <EventsList
+            title="היום"
+            items={todayEvents}
+            patientNameById={patientNameById}
+            tone="today"
+          />
+          <EventsList
+            title="באיחור"
+            items={overdueEvents}
+            patientNameById={patientNameById}
+            tone="overdue"
+          />
+          <EventsList
+            title="קרובים (14 ימים)"
+            items={upcomingEvents.slice(0, 10)}
+            patientNameById={patientNameById}
+            tone="upcoming"
+          />
+        </section>
+      )}
 
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-5">
         <div className="stat-card">
