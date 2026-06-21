@@ -45,6 +45,20 @@ export default function PhoneTasksPage() {
   const [expandedId, setExpandedId] = useState(null);
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
+  // Playable URL for the currently-open recording. Recordings live in a PRIVATE
+  // bucket, so a short-lived signed URL is generated on demand for playback.
+  const [recUrl, setRecUrl] = useState(null);
+
+  // Resolve a stored recording reference to something the browser can play:
+  // a full http(s) URL is used as-is; a storage object path is signed.
+  async function resolveRecordingUrl(stored) {
+    if (!stored) return null;
+    if (/^https?:\/\//.test(stored)) return stored;
+    const { data } = await supabase.storage
+      .from("recordings")
+      .createSignedUrl(stored, 60 * 60);
+    return data?.signedUrl || null;
+  }
 
   async function load() {
     if (!supabaseReady) {
@@ -80,10 +94,12 @@ export default function PhoneTasksPage() {
     if (expandedId === r.id) {
       setExpandedId(null);
       setDraft(null);
+      setRecUrl(null);
       return;
     }
     setExpandedId(r.id);
     setError("");
+    setRecUrl(null);
     setDraft({
       spoken_patient_name: r.spoken_patient_name || "",
       patient_id: r.patient_id || "",
@@ -91,6 +107,8 @@ export default function PhoneTasksPage() {
       task_definition: r.task_definition || "",
       transcription: r.transcription || "",
     });
+    // Generate a playable (signed) URL for the private recording, if any.
+    resolveRecordingUrl(r.recording_url).then((u) => setRecUrl(u));
   }
 
   // Save edits without approving. Recompute the review status from the patient
@@ -135,13 +153,23 @@ export default function PhoneTasksPage() {
     setSaving(true);
     setError("");
 
+    // The task lives in "ניהול משימות" indefinitely, so mint a long-lived signed
+    // URL for the private recording (the stored value is only an object path).
+    let taskRecordingUrl = r.recording_url || null;
+    if (taskRecordingUrl && !/^https?:\/\//.test(taskRecordingUrl)) {
+      const { data: signed } = await supabase.storage
+        .from("recordings")
+        .createSignedUrl(taskRecordingUrl, 60 * 60 * 24 * 365);
+      taskRecordingUrl = signed?.signedUrl || taskRecordingUrl;
+    }
+
     const taskPayload = {
       patient_id,
       hours: draft.hours === "" ? null : Number(draft.hours),
       task_definition: draft.task_definition.trim() || null,
       source: "phone",
       caller_phone: r.caller_phone || null,
-      recording_url: r.recording_url || null,
+      recording_url: taskRecordingUrl,
       transcription: draft.transcription.trim() || null,
       call_external_id: r.call_external_id || null,
       status: "פתוח",
@@ -484,22 +512,18 @@ export default function PhoneTasksPage() {
                           </button>
                         </>
                       )}
-                      {r.recording_url && (
-                        <audio
-                          controls
-                          src={r.recording_url}
-                          className="h-9 max-w-[260px]"
-                        >
-                          <a
-                            href={r.recording_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-sm text-accent-700 hover:underline font-medium"
-                          >
-                            🎧 האזנה להקלטה
-                          </a>
-                        </audio>
-                      )}
+                      {r.recording_url &&
+                        (recUrl ? (
+                          <audio
+                            controls
+                            src={recUrl}
+                            className="h-9 max-w-[260px]"
+                          />
+                        ) : (
+                          <span className="text-xs text-ink-500">
+                            טוען הקלטה…
+                          </span>
+                        ))}
                       <span className="flex-1" />
                       <IconButton
                         variant="delete"
