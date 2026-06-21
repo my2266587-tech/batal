@@ -69,8 +69,32 @@ alter table tasks add column if not exists phone_status text;
 create index if not exists tasks_phone_status_idx
   on tasks (phone_status) where phone_status is not null;
 
+-- טבלת ביניים: הקלטות טלפון הממתינות לאישור ("טלפונים ממתינים").
+-- הקלטה מהטלפון נשמרת כאן ואינה יוצרת מיד משימה. משימה בטבלת tasks נוצרת
+-- רק בלחיצה על "אשרי והעבירי לניהול משימות". בטוח להרצה חוזרת.
+create table if not exists phone_recordings (
+  id uuid primary key default gen_random_uuid(),
+  call_external_id text,
+  caller_phone text,
+  recording_url text,
+  transcription text,
+  spoken_patient_name text,            -- השם שנאמר (לא נדרס ע"י שיוך ידני)
+  patient_id uuid references patients(id) on delete set null,
+  hours numeric(6,2),
+  task_definition text,
+  -- ready / needs_patient / failed / approved
+  status text not null default 'needs_patient',
+  task_id uuid references tasks(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists phone_recordings_call_key
+  on phone_recordings (call_external_id) where call_external_id is not null;
+create index if not exists phone_recordings_status_idx on phone_recordings (status);
+create index if not exists phone_recordings_created_idx on phone_recordings (created_at desc);
+
 -- טבלת מצב שיחה זמנית (IVR) — אחסון זמני של שלבי השיחה עד לאישור.
--- שורה כאן אינה משימה; משימה נוצרת בטבלת tasks רק בעת אישור.
+-- שורה כאן אינה משימה; הקלטה נשמרת בטבלת phone_recordings רק בעת אישור בטלפון.
 create table if not exists ivr_sessions (
   call_id text primary key,
   caller_phone text,
@@ -105,6 +129,7 @@ alter table patients enable row level security;
 alter table tasks enable row level security;
 alter table cash_records enable row level security;
 alter table ivr_sessions enable row level security;
+alter table phone_recordings enable row level security;
 
 drop policy if exists "patients_all" on patients;
 create policy "patients_all" on patients for all using (true) with check (true);
@@ -117,3 +142,6 @@ create policy "cash_all" on cash_records for all using (true) with check (true);
 
 drop policy if exists "ivr_sessions_all" on ivr_sessions;
 create policy "ivr_sessions_all" on ivr_sessions for all using (true) with check (true);
+
+drop policy if exists "phone_recordings_all" on phone_recordings;
+create policy "phone_recordings_all" on phone_recordings for all using (true) with check (true);

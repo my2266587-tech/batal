@@ -1,23 +1,26 @@
-// Telephone task creation via Yemot Hamashiach ("ימות המשיח") — single-recording flow.
+// Telephone capture via Yemot Hamashiach ("ימות המשיח") — single-recording flow.
 //
 // A single Yemot "API" extension points at this endpoint. The caller says ONE
 // sentence containing: the patient's name, the duration (hours), and the task
 // definition. After she confirms (presses 1), the server parses the transcript
-// and creates a task DIRECTLY in the existing `tasks` table.
+// and saves a row to the `phone_recordings` review table — it does NOT create
+// a task. A task in the existing `tasks` table is created only later, when a
+// user approves the recording on the "טלפונים ממתינים" screen.
 //
 // State for the (multi-request) call lives in the transient `ivr_sessions`
-// table, so a dropped call before confirmation never creates a partial task.
+// table, so a dropped call before confirmation never saves a partial row.
 // Duplicates are prevented by the unique call id (ApiCallId).
 //
-// Field mapping (existing `tasks` columns):
-//   patient name      → patient_id (matched by name; null + note if unmatched)
-//   duration (hours)  → hours
-//   task definition   → task_definition
-//   source            → source = "phone"
-//   caller number     → caller_phone
-//   recording path    → recording_url
-//   full transcript   → transcription
-//   unique call id    → call_external_id
+// Field mapping (`phone_recordings` columns):
+//   spoken patient name → spoken_patient_name (kept verbatim, never overwritten)
+//   matched patient     → patient_id (exact name match; null when unmatched)
+//   duration (hours)    → hours
+//   task definition     → task_definition
+//   caller number       → caller_phone
+//   recording path      → recording_url
+//   full transcript     → transcription
+//   unique call id      → call_external_id
+//   review state        → status (ready / needs_patient / failed)
 //
 // No payment / case logic is touched. Anon key only (server-side).
 
@@ -98,7 +101,7 @@ function renderStep(session) {
       );
     case STEP.CONFIRM: {
       const d = session.data || {};
-      const messages = [t("המשימה שהוקלטה היא")];
+      const messages = [t("ההקלטה שהוקלטה היא")];
       if (d.rec) messages.push(f(d.rec));
       messages.push(
         t("לשמירה הקישי 1 להקלטה מחדש הקישי 2 לביטול הקישי 3"),
@@ -136,21 +139,53 @@ async function matchPatientByName(supabase, transcript) {
     : { patientId: null, matchedName: null };
 }
 
-// Create the task from the confirmed recording. Idempotent on call_external_id.
-async function createTask(supabase, session, callId, phone) {
-  const d = session.data || {};
+// Best-effort extraction of the spoken patient name from the transcript.
+// When an exact patient was matched, the matched full name *is* what was said
+// (it occurs verbatim in the transcript), so prefer it. Otherwise fall back to
+// a heuristic: the caller is asked to say the name first, so take the words up
+// to the first duration/number token (capped at 3 words).
+function extractSpokenName(transcript, matchedName) {
+  if (matchedName) return matchedName;
+  const norm = normHeb(transcript);
+  if (!norm) return null;
+  const words = norm.split(" ").filter(Boolean);
+  if (!words.length) return null;
+  const DUR = /^(שעה|שעתיים|שעות|דקה|דקות|חצי|רבע|שלושת|רבעי)$/;
+  let idx = words.findIndex((w) => /\d/.test(w) || DUR.test(w));
+  if (idx <= 0) idx = Math.min(2, words.length); // no marker → first two words
+  idx = Math.min(idx, 3); // never let the "name" run longer than 3 words
+  const name = words.slice(0, idx).join(" ").trim();
+  return name || null;
+}
 
-  if (session.task_id) return { ok: true, taskId: session.task_id };
+// Derive a clean task definition: the transcript with the patient name removed
+// (so it reads as the task only). Falls back to the full transcript.
+function buildTaskDefinition(transcript, spokenName, matchedName) {
+  if (!transcript) return null;
+  let def = transcript;
+  for (const n of [matchedName, spokenName]) {
+    if (n) def = def.replace(new RegExp(escapeRegex(n), "g"), " ");
+  }
+  def = def.replace(/\s+/g, " ").trim();
+  return def.length >= 2 ? def : transcript;
+}
+
+// Save the confirmed recording to the review table. Idempotent on
+// call_external_id — never creates a task here (that happens on approval).
+async function createRecording(supabase, session, callId, phone) {
+  const d = session.data || (session.data = {});
+
+  if (d.recording_id) return { ok: true, recordingId: d.recording_id };
   const existing = await supabase
-    .from("tasks")
+    .from("phone_recordings")
     .select("id")
     .eq("call_external_id", callId)
     .maybeSingle();
-  if (existing.data?.id) return { ok: true, taskId: existing.data.id };
+  if (existing.data?.id) return { ok: true, recordingId: existing.data.id };
 
   const transcript = (d.transcript || "").trim();
 
-  // Identify patient by spoken name (best-effort).
+  // Exact patient match (best-effort) + the name the caller actually said.
   let patientId = null;
   let matchedName = null;
   if (transcript) {
@@ -158,79 +193,48 @@ async function createTask(supabase, session, callId, phone) {
     patientId = m.patientId;
     matchedName = m.matchedName;
   }
-
-  // Duration → hours (do not block the save if it can't be parsed).
+  const spokenName = extractSpokenName(transcript, matchedName);
   const hours = transcript ? parseHebrewDuration(transcript) : null;
+  const taskDefinition = transcript
+    ? buildTaskDefinition(transcript, spokenName, matchedName)
+    : d.rec
+      ? TASK_PLACEHOLDER
+      : null;
 
-  // Task definition: the transcript with the matched patient name removed
-  // (so the definition reads cleanly); fall back to the full transcript, or a
-  // placeholder when there is no transcript at all.
-  let taskDefinition;
-  if (transcript) {
-    let def = transcript;
-    if (matchedName) {
-      def = def.replace(new RegExp(escapeRegex(matchedName), "g"), " ").trim();
-    }
-    def = def.replace(/\s+/g, " ").trim();
-    taskDefinition = def.length >= 2 ? def : transcript;
-  } else {
-    taskDefinition = d.rec ? TASK_PLACEHOLDER : null;
-  }
-
-  // If the patient wasn't identified, keep the spoken text so it can be linked
-  // and edited by hand later.
-  const otherNotes = [];
-  if (!patientId) {
-    otherNotes.push(
-      `מהטלפון - לא זוהתה מטופלת. נאמר: ${transcript || "(אין תמלול - יש להאזין להקלטה)"}`,
-    );
-  }
+  // Review state: no transcript → failed (needs manual listen); matched
+  // patient → ready for approval; otherwise needs a patient to be linked.
+  const status = !transcript ? "failed" : patientId ? "ready" : "needs_patient";
 
   const payload = {
-    task_definition: taskDefinition,
-    hours: hours != null ? hours : null,
-    status: "פתוח",
-    patient_id: patientId,
-    source: "phone",
+    call_external_id: callId,
     caller_phone: phone || session.caller_phone || null,
     recording_url: d.rec || null,
     transcription: transcript || null,
-    other_details: otherNotes.length ? otherNotes.join(" | ") : null,
-    call_external_id: callId,
-    // Phone-call review state: linked → awaiting approval; otherwise needs a patient.
-    phone_status: patientId ? "pending" : "needs_patient",
+    spoken_patient_name: spokenName || null,
+    patient_id: patientId,
+    hours: hours != null ? hours : null,
+    task_definition: taskDefinition,
+    status,
   };
 
-  let { data, error } = await supabase
-    .from("tasks")
+  const { data, error } = await supabase
+    .from("phone_recordings")
     .insert([payload])
     .select("id")
     .single();
 
-  // Graceful degrade: if the phone_status column hasn't been migrated yet,
-  // retry without it so a call is never lost (review state falls back to
-  // patient_id on the inbox screen).
-  if (error && /phone_status/.test(error.message || "")) {
-    const { phone_status, ...rest } = payload; // eslint-disable-line no-unused-vars
-    ({ data, error } = await supabase
-      .from("tasks")
-      .insert([rest])
-      .select("id")
-      .single());
-  }
-
   if (error) {
     if (error.code === "23505") {
       const again = await supabase
-        .from("tasks")
+        .from("phone_recordings")
         .select("id")
         .eq("call_external_id", callId)
         .maybeSingle();
-      if (again.data?.id) return { ok: true, taskId: again.data.id };
+      if (again.data?.id) return { ok: true, recordingId: again.data.id };
     }
     return { ok: false, error: error.message };
   }
-  return { ok: true, taskId: data.id };
+  return { ok: true, recordingId: data.id };
 }
 
 async function loadSession(supabase, callId, phone) {
@@ -347,15 +351,21 @@ async function applyInput(supabase, session, value, params, callId, phone) {
 
     case STEP.CONFIRM:
       if (v === "1") {
-        const res = await createTask(supabase, session, callId, phone);
+        const res = await createRecording(supabase, session, callId, phone);
         session.step = STEP.DONE;
         if (res.ok) {
-          session.task_id = res.taskId;
-          console.log(`[yemot-ivr] task created call=${callId} task=${res.taskId}`);
-          return sayAndHangup(t("המשימה נשמרה בהצלחה תודה ולהתראות"));
+          // Track the saved recording id in the session data (jsonb) so a
+          // duplicate request within the same call never inserts twice.
+          d.recording_id = res.recordingId;
+          console.log(
+            `[yemot-ivr] recording saved call=${callId} recording=${res.recordingId}`,
+          );
+          return sayAndHangup(
+            t("ההקלטה נשמרה וממתינה לאישור תודה ולהתראות"),
+          );
         }
-        console.error(`[yemot-ivr] task save failed call=${callId}`);
-        return sayAndHangup(t("אירעה שגיאה בשמירת המשימה אנא נסי שוב מאוחר יותר"));
+        console.error(`[yemot-ivr] recording save failed call=${callId}`);
+        return sayAndHangup(t("אירעה שגיאה בשמירת ההקלטה אנא נסי שוב מאוחר יותר"));
       } else if (v === "2") {
         // Re-record: bump attempt (avoid echoed-var shadowing) and restart.
         session.attempt += 1;

@@ -6,29 +6,33 @@ import SetupNotice from "@/components/SetupNotice";
 import { ChevronDownIcon, DeleteIcon, IconButton } from "@/components/Icons";
 import { formatDate } from "@/lib/format";
 
-// Review inbox for tasks created from the phone (Yemot). These rows already
-// live in the `tasks` table (source = "phone"); this screen lets the user go
-// over the captured text, fix it, and link a patient — or it stays flagged
-// "needs patient" until handled. Approving removes it from the inbox; the task
-// itself remains in "ניהול משימות" like any other task.
+// Review inbox for phone recordings (Yemot). A recording does NOT create a task
+// on its own — it lands here in the `phone_recordings` table. The user goes over
+// the transcription, fixes the spoken name / hours / definition and links a
+// patient, then approves. Only on approval ("אשרי והעבירי לניהול משימות") is a
+// real row written to the `tasks` table; the recording is then locked.
 
-const PHONE_STATUS = {
-  pending: { label: "ממתין לאישור", cls: "badge-info" },
-  needs_patient: { label: "צריך שיוך למטופל", cls: "badge-warning" },
-  approved: { label: "אושר", cls: "badge-success" },
+const STATUS = {
+  ready: { label: "מוכן לאישור", cls: "badge-info" },
+  needs_patient: { label: "צריך שיוך מטופלת", cls: "badge-warning" },
+  failed: { label: "נכשל", cls: "badge-danger" },
+  approved: { label: "אושר והועבר למשימות", cls: "badge-success" },
 };
 
 const FILTERS = [
-  { value: "awaiting", label: "ממתינים לאישור" },
-  { value: "needs_patient", label: "צריך שיוך למטופל" },
+  { value: "open", label: "ממתינים" },
+  { value: "ready", label: "מוכן לאישור" },
+  { value: "needs_patient", label: "צריך שיוך מטופלת" },
+  { value: "failed", label: "נכשל" },
   { value: "approved", label: "אושרו" },
   { value: "all", label: "הכל" },
 ];
 
-// Effective status (older rows created before phone_status was added have null).
-function effStatus(t) {
-  if (t.phone_status) return t.phone_status;
-  return t.patient_id ? "pending" : "needs_patient";
+// Effective status (defensive — older rows without a status fall back sensibly).
+function effStatus(r) {
+  if (r.status) return r.status;
+  if (r.task_id) return "approved";
+  return r.patient_id ? "ready" : "needs_patient";
 }
 
 export default function PhoneTasksPage() {
@@ -36,7 +40,7 @@ export default function PhoneTasksPage() {
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [filter, setFilter] = useState("awaiting");
+  const [filter, setFilter] = useState("open");
   const [search, setSearch] = useState("");
   const [expandedId, setExpandedId] = useState(null);
   const [draft, setDraft] = useState(null);
@@ -48,17 +52,16 @@ export default function PhoneTasksPage() {
       return;
     }
     setLoading(true);
-    const [tRes, pRes] = await Promise.all([
+    const [rRes, pRes] = await Promise.all([
       supabase
-        .from("tasks")
+        .from("phone_recordings")
         .select("*")
-        .eq("source", "phone")
         .order("created_at", { ascending: false }),
       supabase.from("patients").select("id, full_name").order("full_name"),
     ]);
-    if (tRes.error) setError(tRes.error.message);
+    if (rRes.error) setError(rRes.error.message);
     if (pRes.error) setError(pRes.error.message);
-    setRows(tRes.data || []);
+    setRows(rRes.data || []);
     setPatients(pRes.data || []);
     setLoading(false);
   }
@@ -73,35 +76,43 @@ export default function PhoneTasksPage() {
     return m;
   }, [patients]);
 
-  function openEdit(t) {
-    if (expandedId === t.id) {
+  function openEdit(r) {
+    if (expandedId === r.id) {
       setExpandedId(null);
       setDraft(null);
       return;
     }
-    setExpandedId(t.id);
+    setExpandedId(r.id);
     setError("");
     setDraft({
-      task_definition: t.task_definition || "",
-      patient_id: t.patient_id || "",
-      hours: t.hours != null && t.hours !== "" ? String(t.hours) : "",
+      spoken_patient_name: r.spoken_patient_name || "",
+      patient_id: r.patient_id || "",
+      hours: r.hours != null && r.hours !== "" ? String(r.hours) : "",
+      task_definition: r.task_definition || "",
+      transcription: r.transcription || "",
     });
   }
 
-  async function save(t, approve = false) {
+  // Save edits without approving. Recompute the review status from the patient
+  // link. The spoken name is whatever the user typed — never auto-overwritten.
+  async function save(r) {
+    if (effStatus(r) === "approved") return;
     setSaving(true);
     setError("");
     const patient_id = draft.patient_id || null;
     const payload = {
-      task_definition: draft.task_definition || null,
+      spoken_patient_name: draft.spoken_patient_name.trim() || null,
       patient_id,
       hours: draft.hours === "" ? null : Number(draft.hours),
-      phone_status: approve ? "approved" : patient_id ? "pending" : "needs_patient",
+      task_definition: draft.task_definition.trim() || null,
+      transcription: draft.transcription.trim() || null,
+      status: patient_id ? "ready" : "needs_patient",
+      updated_at: new Date().toISOString(),
     };
     const { error: err } = await supabase
-      .from("tasks")
+      .from("phone_recordings")
       .update(payload)
-      .eq("id", t.id);
+      .eq("id", r.id);
     setSaving(false);
     if (err) {
       setError(err.message);
@@ -112,38 +123,126 @@ export default function PhoneTasksPage() {
     load();
   }
 
+  // Approve → create the real task, then lock the recording. Double-approval is
+  // prevented by the status/task_id guard here and by the unique call id on tasks.
+  async function approveAndMove(r) {
+    if (effStatus(r) === "approved" || r.task_id) return;
+    const patient_id = draft.patient_id || null;
+    if (!patient_id) {
+      setError("יש לשייך מטופלת לפני האישור וההעברה לניהול משימות.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+
+    const taskPayload = {
+      patient_id,
+      hours: draft.hours === "" ? null : Number(draft.hours),
+      task_definition: draft.task_definition.trim() || null,
+      source: "phone",
+      caller_phone: r.caller_phone || null,
+      recording_url: r.recording_url || null,
+      transcription: draft.transcription.trim() || null,
+      call_external_id: r.call_external_id || null,
+      status: "פתוח",
+    };
+
+    const { data: task, error: taskErr } = await supabase
+      .from("tasks")
+      .insert([taskPayload])
+      .select("id")
+      .single();
+
+    let taskId = task?.id;
+    // If this call's id already produced a task (unique index), reuse it instead
+    // of failing — keeps approval idempotent.
+    if (taskErr) {
+      if (taskErr.code === "23505" && r.call_external_id) {
+        const again = await supabase
+          .from("tasks")
+          .select("id")
+          .eq("call_external_id", r.call_external_id)
+          .maybeSingle();
+        taskId = again.data?.id;
+      }
+      if (!taskId) {
+        setSaving(false);
+        setError("יצירת המשימה נכשלה: " + taskErr.message);
+        return;
+      }
+    }
+
+    const { error: updErr } = await supabase
+      .from("phone_recordings")
+      .update({
+        // Keep the spoken name verbatim; persist the user's final edits.
+        spoken_patient_name: draft.spoken_patient_name.trim() || null,
+        patient_id,
+        hours: draft.hours === "" ? null : Number(draft.hours),
+        task_definition: draft.task_definition.trim() || null,
+        transcription: draft.transcription.trim() || null,
+        status: "approved",
+        task_id: taskId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", r.id);
+
+    setSaving(false);
+    if (updErr) {
+      setError(
+        "המשימה נוצרה אך עדכון ההקלטה נכשל: " + updErr.message,
+      );
+      return;
+    }
+    setExpandedId(null);
+    setDraft(null);
+    load();
+  }
+
   async function handleDelete(id) {
-    if (!confirm("למחוק את המשימה הזו לצמיתות?")) return;
-    const { error: err } = await supabase.from("tasks").delete().eq("id", id);
+    if (!confirm("למחוק את ההקלטה הזו לצמיתות?")) return;
+    const { error: err } = await supabase
+      .from("phone_recordings")
+      .delete()
+      .eq("id", id);
     if (err) setError(err.message);
     else load();
   }
 
   const counts = useMemo(() => {
-    const c = { awaiting: 0, needs_patient: 0, approved: 0, all: rows.length };
-    rows.forEach((t) => {
-      const s = effStatus(t);
-      if (s === "approved") c.approved++;
-      else c.awaiting++;
-      if (s === "needs_patient") c.needs_patient++;
+    const c = {
+      open: 0,
+      ready: 0,
+      needs_patient: 0,
+      failed: 0,
+      approved: 0,
+      all: rows.length,
+    };
+    rows.forEach((r) => {
+      const s = effStatus(r);
+      if (c[s] != null) c[s]++;
+      if (s !== "approved") c.open++;
     });
     return c;
   }, [rows]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rows.filter((t) => {
-      const s = effStatus(t);
-      if (filter === "awaiting" && s === "approved") return false;
-      if (filter === "needs_patient" && s !== "needs_patient") return false;
-      if (filter === "approved" && s !== "approved") return false;
+    return rows.filter((r) => {
+      const s = effStatus(r);
+      if (filter === "open" && s === "approved") return false;
+      if (
+        ["ready", "needs_patient", "failed", "approved"].includes(filter) &&
+        s !== filter
+      )
+        return false;
       if (q) {
         const hay = [
-          t.task_definition,
-          t.transcription,
-          t.caller_phone,
-          t.other_details,
-          patientNameById[t.patient_id],
+          r.spoken_patient_name,
+          r.task_definition,
+          r.transcription,
+          r.caller_phone,
+          patientNameById[r.patient_id],
         ]
           .map((v) => String(v || "").toLowerCase())
           .join(" ");
@@ -168,7 +267,8 @@ export default function PhoneTasksPage() {
         <div>
           <h1 className="page-title">טלפונים ממתינים</h1>
           <p className="page-subtitle">
-            הקלטות שנקלטו מהטלפון — לעבור על המלל, לערוך ולשייך מטופלת.
+            הקלטות שנקלטו מהטלפון — לעבור על המלל, לשייך מטופלת ולאשר. משימה
+            נוצרת רק בעת האישור.
           </p>
         </div>
         <input
@@ -218,35 +318,43 @@ export default function PhoneTasksPage() {
         <div className="card p-8 text-center text-ink-500">טוען...</div>
       ) : filtered.length === 0 ? (
         <div className="card p-10 text-center">
-          <p className="text-ink-900 font-semibold mb-1">אין שיחות להצגה</p>
+          <p className="text-ink-900 font-semibold mb-1">אין הקלטות להצגה</p>
           <p className="text-ink-500 text-sm">
-            משימות שנוצרות מהטלפון יופיעו כאן אוטומטית.
+            הקלטות שנקלטות מהטלפון יופיעו כאן אוטומטית.
           </p>
         </div>
       ) : (
         <div className="card divide-y divide-line overflow-hidden">
-          {filtered.map((t) => {
-            const st = PHONE_STATUS[effStatus(t)] || PHONE_STATUS.pending;
-            const linked = !!t.patient_id;
-            const isOpen = expandedId === t.id;
+          {filtered.map((r) => {
+            const st = STATUS[effStatus(r)] || STATUS.needs_patient;
+            const linked = !!r.patient_id;
+            const matchedName = linked
+              ? patientNameById[r.patient_id] || "מטופלת"
+              : "לא שויך";
+            const spoken = r.spoken_patient_name || "—";
+            const isOpen = expandedId === r.id;
+            const isApproved = effStatus(r) === "approved";
             return (
-              <Fragment key={t.id}>
+              <Fragment key={r.id}>
                 <div
                   className="flex items-center gap-4 p-4 cursor-pointer hover:bg-surface-subtle"
-                  onClick={() => openEdit(t)}
+                  onClick={() => openEdit(r)}
                 >
                   <div className="w-10 h-10 rounded-lg bg-accent-50 text-accent-700 flex items-center justify-center text-lg flex-shrink-0">
                     📞
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium text-ink-900 truncate">
-                      {linked
-                        ? patientNameById[t.patient_id] || "מטופלת"
-                        : t.task_definition || "שיחה ללא זיהוי"}
+                    {/* spoken name ↔ matched patient */}
+                    <div className="font-medium text-ink-900 truncate flex items-center gap-1.5">
+                      <span>{spoken}</span>
+                      <span className="text-ink-400">↔</span>
+                      <span className={linked ? "text-emerald-700" : "text-amber-700"}>
+                        {matchedName}
+                      </span>
                     </div>
                     <div className="text-xs text-ink-500 mt-0.5">
-                      {formatDate(t.created_at)}
-                      {t.caller_phone ? ` · ${t.caller_phone}` : ""}
+                      {formatDate(r.created_at)}
+                      {r.caller_phone ? ` · ${r.caller_phone}` : ""}
                     </div>
                   </div>
                   <span className={linked ? "badge-accent" : "badge-warning"}>
@@ -263,99 +371,140 @@ export default function PhoneTasksPage() {
 
                 {isOpen && draft && (
                   <div className="p-5 bg-surface-subtle border-t border-line space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div className="md:col-span-2">
-                        <label className="label">מלל המשימה</label>
-                        <textarea
-                          className="input min-h-[90px] whitespace-pre-wrap"
-                          value={draft.task_definition}
+                    {isApproved && (
+                      <div className="badge-success inline-flex">
+                        אושר והועבר לניהול משימות — לא ניתן לאשר שוב
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="label">השם שנאמר</label>
+                        <input
+                          className="input"
+                          placeholder="השם שנשמע בהקלטה"
+                          value={draft.spoken_patient_name}
+                          disabled={isApproved}
                           onChange={(e) =>
-                            setDraft((d) => ({ ...d, task_definition: e.target.value }))
+                            setDraft((d) => ({
+                              ...d,
+                              spoken_patient_name: e.target.value,
+                            }))
                           }
                         />
                       </div>
-                      <div className="space-y-4">
-                        <div>
-                          <label className="label">שיוך מטופלת</label>
-                          <select
-                            className="input"
-                            value={draft.patient_id}
-                            onChange={(e) =>
-                              setDraft((d) => ({ ...d, patient_id: e.target.value }))
-                            }
-                          >
-                            <option value="">— ללא שיוך —</option>
-                            {patients.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.full_name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="label">משך שעות</label>
-                          <input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            className="input"
-                            placeholder="לדוגמה: 1.5"
-                            value={draft.hours}
-                            onChange={(e) =>
-                              setDraft((d) => ({ ...d, hours: e.target.value }))
-                            }
-                          />
-                        </div>
+                      <div>
+                        <label className="label">שיוך מטופלת</label>
+                        <select
+                          className="input"
+                          value={draft.patient_id}
+                          disabled={isApproved}
+                          onChange={(e) =>
+                            setDraft((d) => ({ ...d, patient_id: e.target.value }))
+                          }
+                        >
+                          <option value="">— ללא שיוך —</option>
+                          {patients.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.full_name}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-[11px] text-ink-500 mt-1">
+                          {draft.spoken_patient_name || "—"} ↔{" "}
+                          {draft.patient_id
+                            ? patientNameById[draft.patient_id] || "מטופלת"
+                            : "לא שויך"}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="label">משך שעות</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="input"
+                          placeholder="לדוגמה: 1.5"
+                          value={draft.hours}
+                          disabled={isApproved}
+                          onChange={(e) =>
+                            setDraft((d) => ({ ...d, hours: e.target.value }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="label">הגדרת משימה</label>
+                        <textarea
+                          className="input min-h-[60px] whitespace-pre-wrap"
+                          value={draft.task_definition}
+                          disabled={isApproved}
+                          onChange={(e) =>
+                            setDraft((d) => ({
+                              ...d,
+                              task_definition: e.target.value,
+                            }))
+                          }
+                        />
                       </div>
                     </div>
 
-                    {t.transcription && (
-                      <div>
-                        <div className="text-xs text-ink-500 mb-1">תמלול מלא</div>
-                        <div className="bg-white border border-line rounded-md p-3 text-sm whitespace-pre-wrap leading-6">
-                          {t.transcription}
-                        </div>
-                      </div>
-                    )}
-
-                    {t.other_details && (
-                      <div className="text-xs text-ink-500">{t.other_details}</div>
-                    )}
+                    <div>
+                      <label className="label">תמלול</label>
+                      <textarea
+                        className="input min-h-[90px] whitespace-pre-wrap"
+                        value={draft.transcription}
+                        disabled={isApproved}
+                        onChange={(e) =>
+                          setDraft((d) => ({
+                            ...d,
+                            transcription: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
 
                     <div className="flex flex-wrap items-center gap-3">
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        disabled={saving}
-                        onClick={() => save(t, false)}
-                      >
-                        {saving ? "שומר..." : "שמור"}
-                      </button>
-                      {effStatus(t) !== "approved" && (
-                        <button
-                          type="button"
-                          className="rounded-lg px-4 py-2 text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
-                          disabled={saving}
-                          onClick={() => save(t, true)}
-                        >
-                          ✓ אשרי
-                        </button>
+                      {!isApproved && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            disabled={saving}
+                            onClick={() => save(r)}
+                          >
+                            {saving ? "שומר..." : "שמור"}
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-lg px-4 py-2 text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+                            disabled={saving}
+                            onClick={() => approveAndMove(r)}
+                          >
+                            ✓ אשרי והעבירי לניהול משימות
+                          </button>
+                        </>
                       )}
-                      {t.recording_url && (
-                        <a
-                          href={t.recording_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm text-accent-700 hover:underline font-medium"
+                      {r.recording_url && (
+                        <audio
+                          controls
+                          src={r.recording_url}
+                          className="h-9 max-w-[260px]"
                         >
-                          🎧 האזנה להקלטה
-                        </a>
+                          <a
+                            href={r.recording_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm text-accent-700 hover:underline font-medium"
+                          >
+                            🎧 האזנה להקלטה
+                          </a>
+                        </audio>
                       )}
                       <span className="flex-1" />
                       <IconButton
                         variant="delete"
                         title="מחיקה"
-                        onClick={() => handleDelete(t.id)}
+                        onClick={() => handleDelete(r.id)}
                       >
                         <DeleteIcon />
                       </IconButton>
