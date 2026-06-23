@@ -26,12 +26,7 @@
 import { waitUntil } from "@vercel/functions";
 import { getServerSupabase } from "@/lib/supabaseServer";
 import { parseYemotParams, sayAndHangup, t } from "@/lib/yemot";
-import {
-  yemotApiReady,
-  fetchLatestRecording,
-  recordDirPath,
-  redact,
-} from "@/lib/yemotApi";
+import { yemotApiReady, fetchLatestRecording, redact } from "@/lib/yemotApi";
 import { transcribeReady, transcribeHebrew, extractTaskFields } from "@/lib/transcribe";
 import { matchPatientByName } from "@/lib/phoneExtract";
 
@@ -185,7 +180,7 @@ async function handle(request) {
   let audioBuffer = null;
   let audioName = "recording.wav";
   try {
-    const { buffer, fileName } = await fetchLatestRecording(recordDirPath());
+    const { buffer, fileName } = await fetchLatestRecording();
     console.log(`[yemot-rec] audio downloaded call=${callId} bytes=${buffer.length} file=${redact(fileName)}`);
     const path = `phone/${safeName(callId)}_${safeName(fileName) || "rec"}.wav`;
     const { error: upErr } = await supabase.storage
