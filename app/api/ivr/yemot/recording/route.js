@@ -12,16 +12,18 @@
 //   3. GetIVR2Dir + DownloadFile → newest recording in the record folder
 //   4. upload the audio to a PRIVATE Supabase Storage bucket ("recordings")
 //   5. insert the `phone_recordings` row and RESPOND TO YEMOT IMMEDIATELY
-//   6. in the background (after()): transcribe (Hebrew) + extract the 3 fields
+//   6. in the background (waitUntil): transcribe (Hebrew) + extract the 3 fields
 //      (LLM JSON) + match a patient, then UPDATE the row:
 //        matched patient      → status "ready"
 //        transcript, no match → status "needs_patient"
 //        transcription failed → status "failed" (recording kept + editable)
 //
-// It never creates a task in `tasks` (that only happens on manual approval in
-// the "טלפונים ממתינים" screen). The YEMOT_API_TOKEN / OPENAI_API_KEY are never logged.
+// Background work uses waitUntil() from @vercel/functions (Next.js 14.2 — too
+// old for next/server after()). It never creates a task in `tasks` (that only
+// happens on manual approval in the "טלפונים ממתינים" screen). The
+// YEMOT_API_TOKEN / OPENAI_API_KEY are never logged.
 
-import { unstable_after as after } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { getServerSupabase } from "@/lib/supabaseServer";
 import { parseYemotParams, sayAndHangup, t } from "@/lib/yemot";
 import {
@@ -76,9 +78,12 @@ async function insertRecordingRow(supabase, { callId, phone, storagePath, status
 // match a patient, and update the row. A failure NEVER loses the recording —
 // it just lands as "failed" / "needs_patient" for manual handling.
 async function processRecording(supabase, { rowId, audioBuffer, audioName, callId }) {
+  console.log(`[yemot-rec] background started call=${callId} bytes=${audioBuffer?.length || 0}`);
   let transcription = null;
   try {
+    console.log(`[yemot-rec] openai request started call=${callId} op=transcription`);
     transcription = await transcribeHebrew(audioBuffer, audioName);
+    console.log(`[yemot-rec] transcription ok call=${callId} chars=${transcription.length}`);
   } catch (e) {
     console.error(`[yemot-rec] transcription failed call=${callId}: ${redact(e?.message || String(e))}`);
   }
@@ -95,6 +100,7 @@ async function processRecording(supabase, { rowId, audioBuffer, audioName, callI
 
   if (transcription) {
     try {
+      console.log(`[yemot-rec] openai request started call=${callId} op=extract`);
       const fields = await extractTaskFields(transcription);
       update.spoken_patient_name = fields.spoken_patient_name || null;
       update.hours = fields.hours != null ? fields.hours : null;
@@ -124,7 +130,7 @@ async function processRecording(supabase, { rowId, audioBuffer, audioName, callI
   if (error) {
     console.error(`[yemot-rec] row update failed call=${callId}: ${error.message}`);
   } else {
-    console.log(`[yemot-rec] processed call=${callId} status=${update.status}`);
+    console.log(`[yemot-rec] phone_recordings updated call=${callId} status=${update.status}`);
   }
 }
 
@@ -180,6 +186,7 @@ async function handle(request) {
   let audioName = "recording.wav";
   try {
     const { buffer, fileName } = await fetchLatestRecording(recordDirPath());
+    console.log(`[yemot-rec] audio downloaded call=${callId} bytes=${buffer.length} file=${redact(fileName)}`);
     const path = `phone/${safeName(callId)}_${safeName(fileName) || "rec"}.wav`;
     const { error: upErr } = await supabase.storage
       .from(BUCKET)
@@ -188,9 +195,7 @@ async function handle(request) {
     storagePath = path;
     audioBuffer = buffer;
     audioName = fileName || audioName;
-    console.log(
-      `[yemot-rec] pulled+stored call=${callId} file=${redact(fileName)} -> ${BUCKET}/${storagePath}`,
-    );
+    console.log(`[yemot-rec] storage uploaded call=${callId} -> ${BUCKET}/${storagePath}`);
   } catch (e) {
     console.error(`[yemot-rec] pull failed call=${callId}: ${redact(e?.message || String(e))}`);
   }
@@ -209,15 +214,15 @@ async function handle(request) {
     return isHangup ? textResponse("") : textResponse(sayAndHangup(t("אירעה שגיאה תודה")));
   }
 
-  // --- Background (after the response is sent): transcribe + extract + match. ---
+  // --- Background (kept alive past the response via waitUntil): transcribe +
+  //     extract + match. ---
   if (res.id && storagePath && transcribeReady()) {
-    after(async () => {
-      try {
-        await processRecording(supabase, { rowId: res.id, audioBuffer, audioName, callId });
-      } catch (e) {
-        console.error(`[yemot-rec] background error call=${callId}: ${redact(e?.message || String(e))}`);
-      }
-    });
+    console.log(`[yemot-rec] scheduling background call=${callId} row=${res.id}`);
+    waitUntil(
+      processRecording(supabase, { rowId: res.id, audioBuffer, audioName, callId }).catch((e) =>
+        console.error(`[yemot-rec] background error call=${callId}: ${redact(e?.message || String(e))}`),
+      ),
+    );
   } else if (storagePath && !transcribeReady()) {
     console.warn("[yemot-rec] OPENAI_API_KEY not configured — recording saved without transcription");
   }
