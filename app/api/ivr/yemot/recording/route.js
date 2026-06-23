@@ -11,11 +11,17 @@
 //   2. idempotency guard on call id (ApiCallId)
 //   3. GetIVR2Dir + DownloadFile → newest recording in the record folder
 //   4. upload the audio to a PRIVATE Supabase Storage bucket ("recordings")
-//   5. insert a row in `phone_recordings` (status: needs_patient / failed)
+//   5. insert the `phone_recordings` row and RESPOND TO YEMOT IMMEDIATELY
+//   6. in the background (after()): transcribe (Hebrew) + extract the 3 fields
+//      (LLM JSON) + match a patient, then UPDATE the row:
+//        matched patient      → status "ready"
+//        transcript, no match → status "needs_patient"
+//        transcription failed → status "failed" (recording kept + editable)
 //
 // It never creates a task in `tasks` (that only happens on manual approval in
-// the "טלפונים ממתינים" screen). The YEMOT_API_TOKEN is never logged.
+// the "טלפונים ממתינים" screen). The YEMOT_API_TOKEN / OPENAI_API_KEY are never logged.
 
+import { unstable_after as after } from "next/server";
 import { getServerSupabase } from "@/lib/supabaseServer";
 import { parseYemotParams, sayAndHangup, t } from "@/lib/yemot";
 import {
@@ -24,9 +30,13 @@ import {
   recordDirPath,
   redact,
 } from "@/lib/yemotApi";
+import { transcribeReady, transcribeHebrew, extractTaskFields } from "@/lib/transcribe";
+import { matchPatientByName } from "@/lib/phoneExtract";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+// Allow time for the background transcription to finish after the response.
+export const maxDuration = 60;
 
 const BUCKET = "recordings";
 
@@ -43,23 +53,79 @@ function safeName(s) {
     .slice(0, 80);
 }
 
-// Insert the review row. Idempotent on call_external_id.
-async function saveRecordingRow(supabase, { callId, phone, storagePath, status }) {
+// Insert the review row (without transcription — that arrives in the
+// background). Idempotent on call_external_id. Returns the new row id.
+async function insertRecordingRow(supabase, { callId, phone, storagePath, status }) {
   const payload = {
     call_external_id: callId,
     caller_phone: phone || null,
     recording_url: storagePath || null, // storage object path (signed on read)
-    transcription: null, // no STT in this flow — filled by hand in the review modal
-    spoken_patient_name: null,
-    patient_id: null,
-    hours: null,
-    task_definition: null,
     status,
   };
-  const { error } = await supabase.from("phone_recordings").insert([payload]);
-  if (error && error.code === "23505") return { ok: true, duplicate: true };
+  const { data, error } = await supabase
+    .from("phone_recordings")
+    .insert([payload])
+    .select("id")
+    .single();
+  if (error && error.code === "23505") return { ok: true, duplicate: true, id: null };
   if (error) return { ok: false, error: error.message };
-  return { ok: true };
+  return { ok: true, id: data.id };
+}
+
+// Background: transcribe the audio (Hebrew), extract the 3 fields via the LLM,
+// match a patient, and update the row. A failure NEVER loses the recording —
+// it just lands as "failed" / "needs_patient" for manual handling.
+async function processRecording(supabase, { rowId, audioBuffer, audioName, callId }) {
+  let transcription = null;
+  try {
+    transcription = await transcribeHebrew(audioBuffer, audioName);
+  } catch (e) {
+    console.error(`[yemot-rec] transcription failed call=${callId}: ${redact(e?.message || String(e))}`);
+  }
+
+  const update = {
+    transcription: transcription || null,
+    spoken_patient_name: null,
+    hours: null,
+    task_definition: null,
+    patient_id: null,
+    status: "failed",
+    updated_at: new Date().toISOString(),
+  };
+
+  if (transcription) {
+    try {
+      const fields = await extractTaskFields(transcription);
+      update.spoken_patient_name = fields.spoken_patient_name || null;
+      update.hours = fields.hours != null ? fields.hours : null;
+      update.task_definition = fields.task_definition || null;
+
+      const { data: patients } = await supabase
+        .from("patients")
+        .select("id, full_name");
+      const m = matchPatientByName(
+        patients || [],
+        update.spoken_patient_name || transcription,
+      );
+      update.patient_id = m.patientId;
+      // Unambiguous match → ready; transcript but no clear match → needs patient.
+      update.status = m.patientId ? "ready" : "needs_patient";
+    } catch (e) {
+      // Keep the transcript; leave it for manual linking.
+      update.status = "needs_patient";
+      console.error(`[yemot-rec] extraction failed call=${callId}: ${redact(e?.message || String(e))}`);
+    }
+  }
+
+  const { error } = await supabase
+    .from("phone_recordings")
+    .update(update)
+    .eq("id", rowId);
+  if (error) {
+    console.error(`[yemot-rec] row update failed call=${callId}: ${error.message}`);
+  } else {
+    console.log(`[yemot-rec] processed call=${callId} status=${update.status}`);
+  }
 }
 
 async function handle(request) {
@@ -104,36 +170,56 @@ async function handle(request) {
   if (!yemotApiReady()) {
     console.error("[yemot-rec] YEMOT_API_TOKEN not configured — cannot pull recording");
     // Record a failed row so the call is never silently lost.
-    await saveRecordingRow(supabase, { callId, phone, storagePath: null, status: "failed" });
+    await insertRecordingRow(supabase, { callId, phone, storagePath: null, status: "failed" });
     return isHangup ? textResponse("") : textResponse(sayAndHangup(t("אירעה שגיאה תודה")));
   }
 
-  // --- Pull the recording from Yemot and store it privately ---
+  // --- Phase A: pull the recording from Yemot and store it privately ---
   let storagePath = null;
-  let status = "needs_patient";
+  let audioBuffer = null;
+  let audioName = "recording.wav";
   try {
     const { buffer, fileName } = await fetchLatestRecording(recordDirPath());
-    storagePath = `phone/${safeName(callId)}_${safeName(fileName) || "rec"}.wav`;
+    const path = `phone/${safeName(callId)}_${safeName(fileName) || "rec"}.wav`;
     const { error: upErr } = await supabase.storage
       .from(BUCKET)
-      .upload(storagePath, buffer, {
-        contentType: "audio/wav",
-        upsert: true,
-      });
+      .upload(path, buffer, { contentType: "audio/wav", upsert: true });
     if (upErr) throw new Error(`storage upload: ${upErr.message}`);
+    storagePath = path;
+    audioBuffer = buffer;
+    audioName = fileName || audioName;
     console.log(
       `[yemot-rec] pulled+stored call=${callId} file=${redact(fileName)} -> ${BUCKET}/${storagePath}`,
     );
   } catch (e) {
-    status = "failed";
-    storagePath = null;
     console.error(`[yemot-rec] pull failed call=${callId}: ${redact(e?.message || String(e))}`);
   }
 
-  const res = await saveRecordingRow(supabase, { callId, phone, storagePath, status });
+  // --- Insert the row now (recording present → pending; else failed) and
+  //     respond to Yemot immediately. Transcription happens in the background. ---
+  const initialStatus = storagePath ? "needs_patient" : "failed";
+  const res = await insertRecordingRow(supabase, {
+    callId,
+    phone,
+    storagePath,
+    status: initialStatus,
+  });
   if (!res.ok) {
     console.error(`[yemot-rec] db insert failed call=${callId}: ${res.error}`);
     return isHangup ? textResponse("") : textResponse(sayAndHangup(t("אירעה שגיאה תודה")));
+  }
+
+  // --- Background (after the response is sent): transcribe + extract + match. ---
+  if (res.id && storagePath && transcribeReady()) {
+    after(async () => {
+      try {
+        await processRecording(supabase, { rowId: res.id, audioBuffer, audioName, callId });
+      } catch (e) {
+        console.error(`[yemot-rec] background error call=${callId}: ${redact(e?.message || String(e))}`);
+      }
+    });
+  } else if (storagePath && !transcribeReady()) {
+    console.warn("[yemot-rec] OPENAI_API_KEY not configured — recording saved without transcription");
   }
 
   return isHangup
