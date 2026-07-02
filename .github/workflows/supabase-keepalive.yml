@@ -1,0 +1,47 @@
+name: Supabase keep-alive
+
+# Independent, always-on keep-alive that runs in GitHub's cloud (no laptop, no
+# Vercel dependency). Once a day it makes a single read-only GET to the
+# Supabase Auth health endpoint so the free project is never paused for a week
+# of inactivity. It touches no data and uses only the public anon/publishable
+# key (the same key already shipped in the app's browser bundle).
+#
+# Redundant with the Vercel Cron in vercel.json on purpose: either mechanism
+# alone keeps the project awake, and having both means neither being down can
+# let the project sleep.
+
+on:
+  schedule:
+    # 05:30 UTC daily (offset from the Vercel cron's 06:00 for extra spread).
+    - cron: "30 5 * * *"
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+# If a run is somehow already going, don't pile up.
+concurrency:
+  group: supabase-keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping Supabase Auth health endpoint
+        env:
+          SUPABASE_URL: "https://jsqhlihtiagkttecszag.supabase.co"
+          # Public anon/publishable key (sb_publishable_*). Safe to commit:
+          # it is already exposed in the deployed app's client bundle and is
+          # gated by row-level security. NEVER put the service_role key here.
+          SUPABASE_ANON_KEY: "sb_publishable_a5VraZDHIPWNphvzRJJMaw_CP8n4WPy"
+        run: |
+          code=$(curl -sS -o /dev/null -w "%{http_code}" \
+            --retry 3 --retry-all-errors --max-time 30 \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            "${SUPABASE_URL}/auth/v1/health")
+          echo "Supabase /auth/v1/health returned HTTP ${code}"
+          if [ "${code}" -lt 200 ] || [ "${code}" -ge 400 ]; then
+            echo "::error::Keep-alive ping failed (HTTP ${code})"
+            exit 1
+          fi
+          echo "Keep-alive ping OK"
