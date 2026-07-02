@@ -1,10 +1,15 @@
 // Central Keep-Alive for all Supabase projects.
 //
-// Runs OUTSIDE Supabase via Vercel Cron (see vercel.json), twice a week.
+// Runs OUTSIDE Supabase via Vercel Cron (see vercel.json), daily.
 // For each configured project it performs a single, read-only GET to the
-// Supabase REST API root to keep the free project from being paused for
-// inactivity. It never reads, writes, or touches any data, never uses the
+// Supabase Auth health endpoint to keep the free project from being paused
+// for inactivity. It never reads, writes, or touches any data, never uses the
 // service_role key, and never logs or returns secrets.
+//
+// Configuration is optional: if SUPABASE_KEEPALIVE_PROJECTS is unset, the
+// route falls back to this app's own project from NEXT_PUBLIC_SUPABASE_URL /
+// SUPABASE_URL + the matching anon (publishable) key, so the keep-alive works
+// with zero extra setup wherever the app is deployed.
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -30,11 +35,27 @@ function isValidHttpUrl(value) {
   }
 }
 
-// Parse and validate SUPABASE_KEEPALIVE_PROJECTS. Throws an Error with a
-// generic, non-sensitive message on any problem.
+// Fall back to this app's own Supabase project when no explicit keep-alive
+// list is configured. Returns [] if the app's own env is also unset.
+function defaultProjects() {
+  const url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const anonKey =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+  if (isValidHttpUrl(url) && typeof anonKey === "string" && anonKey.trim()) {
+    return [{ name: "default", url, anonKey }];
+  }
+  return [];
+}
+
+// Parse and validate SUPABASE_KEEPALIVE_PROJECTS. When it is unset, fall back
+// to the app's own project (defaultProjects). Throws an Error with a generic,
+// non-sensitive message on any problem.
 function loadProjects() {
   const raw = process.env.SUPABASE_KEEPALIVE_PROJECTS;
   if (!raw || raw.trim().length === 0) {
+    const fallback = defaultProjects();
+    if (fallback.length > 0) return fallback;
     throw new Error("SUPABASE_KEEPALIVE_PROJECTS is missing");
   }
 
@@ -70,14 +91,16 @@ function loadProjects() {
   });
 }
 
-// Perform one read-only GET against {project.url}/rest/v1/.
+// Perform one read-only GET against {project.url}/auth/v1/health.
+// The Auth health endpoint returns 200 for a valid anon/publishable key and,
+// unlike the PostgREST root, is accepted by the new sb_publishable_* keys.
 async function checkProject(project) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROJECT_TIMEOUT_MS);
   const start = Date.now();
 
   try {
-    const endpoint = new URL("/rest/v1/", project.url).toString();
+    const endpoint = new URL("/auth/v1/health", project.url).toString();
     const res = await fetch(endpoint, {
       method: "GET",
       headers: {
@@ -118,16 +141,18 @@ async function checkProject(project) {
 }
 
 export async function GET(request) {
-  // --- Auth: require a correct CRON_SECRET ---
+  // --- Auth ---
+  // When CRON_SECRET is configured, require it (Vercel Cron sends it
+  // automatically as `Authorization: Bearer <CRON_SECRET>`). When it is NOT
+  // configured, allow the request: this endpoint only performs a read-only
+  // health probe, touches no data, and returns no secrets, so leaving it open
+  // lets the keep-alive run out-of-the-box without extra Vercel setup.
   const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret) {
-    // Misconfiguration: fail closed without leaking which part is missing.
-    console.error("[supabase-keepalive] CRON_SECRET is not configured");
-    return Response.json({ success: false, error: "unauthorized" }, { status: 401 });
-  }
-  const authHeader = request.headers.get("authorization");
-  if (authHeader !== `Bearer ${cronSecret}`) {
-    return Response.json({ success: false, error: "unauthorized" }, { status: 401 });
+  if (cronSecret) {
+    const authHeader = request.headers.get("authorization");
+    if (authHeader !== `Bearer ${cronSecret}`) {
+      return Response.json({ success: false, error: "unauthorized" }, { status: 401 });
+    }
   }
 
   // --- Load configuration ---
