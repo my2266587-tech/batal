@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import * as XLSX from "xlsx";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import { DeleteIcon, DocumentIcon, EditIcon, IconButton } from "@/components/Icons";
@@ -531,6 +532,10 @@ export default function PatientCardPage() {
     () => tasks.filter((t) => !isUnpaidStatus(t.payment_status)).sort(sortByDateDesc),
     [tasks],
   );
+  const allTasksSorted = useMemo(
+    () => [...tasks].sort(sortByDateDesc),
+    [tasks],
+  );
 
   const totals = useMemo(() => {
     let hours = 0,
@@ -574,6 +579,167 @@ export default function PatientCardPage() {
     loadAll();
   }
 
+  function buildPaymentExportRows() {
+    return allTasksSorted.map((t) => ({
+      "תאריך": formatDate(t.date_gregorian) || "",
+      "משימה": t.task_definition || "",
+      "סוג פגישה": t.meeting_type || "",
+      "שעות": Number(t.hours || 0).toFixed(2),
+      "סכום": Number(t.total_after_discount || 0).toFixed(2),
+      "סטטוס תשלום": t.payment_status || "לא שולם",
+    }));
+  }
+
+  function downloadPaymentsExcel() {
+    if (allTasksSorted.length === 0) {
+      alert("אין תשלומים לייצוא למטופלת זו");
+      return;
+    }
+    const rows = buildPaymentExportRows();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const headers = Object.keys(rows[0] || {});
+    ws["!cols"] = headers.map((h) => ({
+      wch: Math.max(10, Math.min(40, h.length + 8)),
+    }));
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
+    XLSX.utils.book_append_sheet(wb, ws, "תשלומים");
+    const today = formatDate(new Date()).replace(/\//g, "-");
+    XLSX.writeFile(
+      wb,
+      `תשלומים_${sanitize(patient.full_name)}_${today}.xlsx`,
+    );
+  }
+
+  function printPaymentsSheet() {
+    if (allTasksSorted.length === 0) {
+      alert("אין תשלומים להפקה למטופלת זו");
+      return;
+    }
+    const today = formatDate(new Date());
+
+    const escape = (s) =>
+      String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+    const bodyHtml = allTasksSorted
+      .map((t) => {
+        const checked = ["שולם", "לא לחיוב"].includes(t.payment_status);
+        const cells = [
+          formatDate(t.date_gregorian) || "—",
+          (t.task_definition || "—").slice(0, 80),
+          t.meeting_type || "—",
+          formatDecimalHoursAsHHMM(t.hours),
+          formatCurrency(t.total_after_discount),
+          t.payment_status || "לא שולם",
+        ];
+        return `<tr class="${checked ? "paid" : "unpaid"}">${cells
+          .map((c) => `<td>${escape(c)}</td>`)
+          .join("")}</tr>`;
+      })
+      .join("");
+
+    const html = `<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="utf-8" />
+  <title>דף תשלומים — ${escape(patient.full_name)}</title>
+  <style>
+    @page { size: A4 portrait; margin: 16mm; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Heebo", "Arial Hebrew", Arial, sans-serif;
+      direction: rtl;
+      color: #1f2937;
+      font-size: 11pt;
+      margin: 0;
+      padding: 24px;
+    }
+    h1 { font-size: 18pt; margin: 0 0 4px 0; }
+    .meta { color: #64748b; font-size: 10pt; margin-bottom: 16px; }
+    .summary {
+      display: flex;
+      gap: 24px;
+      padding: 12px 16px;
+      background: #F8FAFC;
+      border: 1px solid #E2E8F0;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 10pt;
+    }
+    .summary div { display: flex; flex-direction: column; gap: 2px; }
+    .summary .label { color: #64748b; }
+    .summary .value { font-weight: bold; font-size: 12pt; }
+    table { width: 100%; border-collapse: collapse; font-size: 10pt; }
+    th, td {
+      padding: 8px 10px;
+      text-align: right;
+      border-bottom: 1px solid #E2E8F0;
+      vertical-align: top;
+    }
+    th { background: #F1F5F9; font-weight: 600; border-bottom: 2px solid #CBD5E1; }
+    tr.paid td:last-child { color: #047857; font-weight: 600; }
+    tr.unpaid td:last-child { color: #b91c1c; font-weight: 600; }
+    .footer { margin-top: 20px; font-size: 9pt; color: #94a3b8; text-align: center; }
+    @media print {
+      body { padding: 0; }
+      .no-print { display: none; }
+    }
+    .no-print {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      background: #EA580C;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 11pt;
+    }
+  </style>
+</head>
+<body>
+  <button class="no-print" onclick="window.print()">הדפסה / שמירה כ-PDF</button>
+  <h1>דף תשלומים — ${escape(patient.full_name)}</h1>
+  <div class="meta">הופק בתאריך ${today} · ${allTasksSorted.length} פגישות</div>
+  <div class="summary">
+    <div><span class="label">סך שעות</span><span class="value">${formatDecimalHoursAsHHMM(totals.hours)}</span></div>
+    <div><span class="label">שולם</span><span class="value" style="color:#047857">${escape(formatCurrency(totals.paid))}</span></div>
+    <div><span class="label">פתוח לתשלום</span><span class="value" style="color:#b91c1c">${escape(formatCurrency(totals.unpaid))}</span></div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>תאריך</th>
+        <th>משימה</th>
+        <th>סוג פגישה</th>
+        <th>שעות</th>
+        <th>סכום</th>
+        <th>סטטוס תשלום</th>
+      </tr>
+    </thead>
+    <tbody>${bodyHtml}</tbody>
+  </table>
+  <div class="footer">בט"ל — מערכת ניהול משימות</div>
+  <script>setTimeout(() => window.print(), 300);</script>
+</body>
+</html>`;
+
+    const win = window.open("", "_blank");
+    if (!win) {
+      alert("הדפדפן חסם פתיחת חלון. אפשרי חלונות קופצים לאתר זה ונסי שוב.");
+      return;
+    }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+  }
+
   if (!supabaseReady) {
     return (
       <div className="space-y-6">
@@ -609,13 +775,31 @@ export default function PatientCardPage() {
         >
           ← חזרה לרשימת מטופלים
         </Link>
-        <Link
-          href={`/patients?edit=${patient.id}`}
-          className="inline-flex items-center gap-2 text-sm text-ink-700 hover:text-accent-700 hover:bg-accent-50 px-3 py-1.5 rounded-md transition-colors"
-        >
-          <EditIcon />
-          עריכה
-        </Link>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={downloadPaymentsExcel}
+            title="הורדת דף תשלומים כקובץ Excel"
+          >
+            ⬇ Excel
+          </button>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={printPaymentsSheet}
+            title="הפקת דף תשלומים מסודר להדפסה / PDF"
+          >
+            ⬇ PDF
+          </button>
+          <Link
+            href={`/patients?edit=${patient.id}`}
+            className="inline-flex items-center gap-2 text-sm text-ink-700 hover:text-accent-700 hover:bg-accent-50 px-3 py-1.5 rounded-md transition-colors"
+          >
+            <EditIcon />
+            עריכה
+          </Link>
+        </div>
       </div>
 
       <header className="card p-6 space-y-4">
