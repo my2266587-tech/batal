@@ -189,6 +189,12 @@ export default function PatientCardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Payments export filter state — lets her send only part of the history
+  // (e.g. only what's unpaid, or only a date range) instead of everything.
+  const [exportStatus, setExportStatus] = useState("all"); // "all" | "paid" | "unpaid"
+  const [exportFrom, setExportFrom] = useState("");
+  const [exportTo, setExportTo] = useState("");
+
   // Upload form state
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadDocType, setUploadDocType] = useState("");
@@ -537,6 +543,33 @@ export default function PatientCardPage() {
     [tasks],
   );
 
+  // What actually goes into the Excel / PDF payments sheet, after the
+  // status + date-range filters below.
+  const exportTasks = useMemo(() => {
+    return allTasksSorted.filter((t) => {
+      if (exportStatus === "paid" && isUnpaidStatus(t.payment_status))
+        return false;
+      if (exportStatus === "unpaid" && !isUnpaidStatus(t.payment_status))
+        return false;
+      const d = t.date_gregorian;
+      if (exportFrom && (!d || d < exportFrom)) return false;
+      if (exportTo && (!d || d > exportTo)) return false;
+      return true;
+    });
+  }, [allTasksSorted, exportStatus, exportFrom, exportTo]);
+
+  const exportTotals = useMemo(() => {
+    let hours = 0,
+      paid = 0,
+      unpaid = 0;
+    exportTasks.forEach((t) => {
+      hours += Number(t.hours) || 0;
+      if (isUnpaidStatus(t.payment_status)) unpaid += Number(t.total_after_discount) || 0;
+      else paid += Number(t.total_after_discount) || 0;
+    });
+    return { hours, paid, unpaid };
+  }, [exportTasks]);
+
   const totals = useMemo(() => {
     let hours = 0,
       before = 0,
@@ -580,7 +613,7 @@ export default function PatientCardPage() {
   }
 
   function buildPaymentExportRows() {
-    return allTasksSorted.map((t) => ({
+    return exportTasks.map((t) => ({
       "תאריך": formatDate(t.date_gregorian) || "",
       "משימה": t.task_definition || "",
       "סוג פגישה": t.meeting_type || "",
@@ -591,8 +624,8 @@ export default function PatientCardPage() {
   }
 
   function downloadPaymentsExcel() {
-    if (allTasksSorted.length === 0) {
-      alert("אין תשלומים לייצוא למטופלת זו");
+    if (exportTasks.length === 0) {
+      alert("אין תשלומים התואמים לסינון שנבחר");
       return;
     }
     const rows = buildPaymentExportRows();
@@ -612,11 +645,18 @@ export default function PatientCardPage() {
   }
 
   function printPaymentsSheet() {
-    if (allTasksSorted.length === 0) {
-      alert("אין תשלומים להפקה למטופלת זו");
+    if (exportTasks.length === 0) {
+      alert("אין תשלומים התואמים לסינון שנבחר");
       return;
     }
     const today = formatDate(new Date());
+
+    const filterParts = [];
+    if (exportStatus === "paid") filterParts.push("רק ששולם");
+    if (exportStatus === "unpaid") filterParts.push("רק שלא שולם");
+    if (exportFrom) filterParts.push(`מתאריך ${formatDate(exportFrom)}`);
+    if (exportTo) filterParts.push(`עד תאריך ${formatDate(exportTo)}`);
+    const filterLabel = filterParts.length ? ` · מסונן: ${filterParts.join(", ")}` : "";
 
     const escape = (s) =>
       String(s ?? "")
@@ -625,7 +665,7 @@ export default function PatientCardPage() {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
 
-    const bodyHtml = allTasksSorted
+    const bodyHtml = exportTasks
       .map((t) => {
         const checked = ["שולם", "לא לחיוב"].includes(t.payment_status);
         const cells = [
@@ -706,11 +746,11 @@ export default function PatientCardPage() {
 <body>
   <button class="no-print" onclick="window.print()">הדפסה / שמירה כ-PDF</button>
   <h1>דף תשלומים — ${escape(patient.full_name)}</h1>
-  <div class="meta">הופק בתאריך ${today} · ${allTasksSorted.length} פגישות</div>
+  <div class="meta">הופק בתאריך ${today} · ${exportTasks.length} פגישות${filterLabel}</div>
   <div class="summary">
-    <div><span class="label">סך שעות</span><span class="value">${formatDecimalHoursAsHHMM(totals.hours)}</span></div>
-    <div><span class="label">שולם</span><span class="value" style="color:#047857">${escape(formatCurrency(totals.paid))}</span></div>
-    <div><span class="label">פתוח לתשלום</span><span class="value" style="color:#b91c1c">${escape(formatCurrency(totals.unpaid))}</span></div>
+    <div><span class="label">סך שעות</span><span class="value">${formatDecimalHoursAsHHMM(exportTotals.hours)}</span></div>
+    <div><span class="label">שולם</span><span class="value" style="color:#047857">${escape(formatCurrency(exportTotals.paid))}</span></div>
+    <div><span class="label">פתוח לתשלום</span><span class="value" style="color:#b91c1c">${escape(formatCurrency(exportTotals.unpaid))}</span></div>
   </div>
   <table>
     <thead>
@@ -775,31 +815,13 @@ export default function PatientCardPage() {
         >
           ← חזרה לרשימת מטופלים
         </Link>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={downloadPaymentsExcel}
-            title="הורדת דף תשלומים כקובץ Excel"
-          >
-            ⬇ Excel
-          </button>
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={printPaymentsSheet}
-            title="הפקת דף תשלומים מסודר להדפסה / PDF"
-          >
-            ⬇ PDF
-          </button>
-          <Link
-            href={`/patients?edit=${patient.id}`}
-            className="inline-flex items-center gap-2 text-sm text-ink-700 hover:text-accent-700 hover:bg-accent-50 px-3 py-1.5 rounded-md transition-colors"
-          >
-            <EditIcon />
-            עריכה
-          </Link>
-        </div>
+        <Link
+          href={`/patients?edit=${patient.id}`}
+          className="inline-flex items-center gap-2 text-sm text-ink-700 hover:text-accent-700 hover:bg-accent-50 px-3 py-1.5 rounded-md transition-colors"
+        >
+          <EditIcon />
+          עריכה
+        </Link>
       </div>
 
       <header className="card p-6 space-y-4">
@@ -891,6 +913,78 @@ export default function PatientCardPage() {
           <div className="stat-label">פתוח לתשלום</div>
           <div className="stat-value">{formatCurrency(totals.unpaid)}</div>
         </div>
+      </section>
+
+      <section className="card p-5">
+        <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+          <h2 className="section-title">הורדת דף תשלומים</h2>
+          <span className="text-xs text-ink-500">
+            {exportTasks.length} מתוך {tasks.length} פגישות ייכללו
+          </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 items-end">
+          <div>
+            <label className="label">סטטוס תשלום</label>
+            <select
+              className="input"
+              value={exportStatus}
+              onChange={(e) => setExportStatus(e.target.value)}
+            >
+              <option value="all">הכל</option>
+              <option value="paid">רק ששולם</option>
+              <option value="unpaid">רק שלא שולם</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">מתאריך</label>
+            <input
+              type="date"
+              className="input"
+              value={exportFrom}
+              onChange={(e) => setExportFrom(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">עד תאריך</label>
+            <input
+              type="date"
+              className="input"
+              value={exportTo}
+              onChange={(e) => setExportTo(e.target.value)}
+            />
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn-ghost flex-1"
+              onClick={downloadPaymentsExcel}
+              title="הורדת דף תשלומים כקובץ Excel"
+            >
+              ⬇ Excel
+            </button>
+            <button
+              type="button"
+              className="btn-ghost flex-1"
+              onClick={printPaymentsSheet}
+              title="הפקת דף תשלומים מסודר להדפסה / PDF"
+            >
+              ⬇ PDF
+            </button>
+          </div>
+        </div>
+        {(exportStatus !== "all" || exportFrom || exportTo) && (
+          <button
+            type="button"
+            className="text-xs text-accent-700 hover:underline mt-3"
+            onClick={() => {
+              setExportStatus("all");
+              setExportFrom("");
+              setExportTo("");
+            }}
+          >
+            איפוס סינון
+          </button>
+        )}
       </section>
 
       <TasksSection
