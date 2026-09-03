@@ -607,6 +607,10 @@ export default function PatientCardPage() {
     let sum = 0;
     for (const t of unpaidTasksAsc) {
       const v = Number(t.total_after_discount) || 0;
+      // No-charge tasks (₪0) don't represent debt — skip them instead of
+      // "using up" a slot for free, which used to block real charges behind
+      // them from ever being reached.
+      if (v <= 0.009) continue;
       if (sum + v <= amt + 0.009) {
         sum += v;
         ids.add(t.id);
