@@ -69,6 +69,14 @@ alter table tasks add column if not exists phone_status text;
 create index if not exists tasks_phone_status_idx
   on tasks (phone_status) where phone_status is not null;
 
+-- מיגרציה: סטטוס תשלום למשימה — שולם / שולם חלקית / לא שולם / לא לחיוב.
+alter table tasks add column if not exists payment_status text default 'לא שולם';
+
+-- מיגרציה: מעקב תשלום חלקי (ראו migrations/20260903_task_paid_amount.sql
+-- לסקריפט המלא כולל איפוס נתונים קיימים). כמה שולם בפועל על חשבון המשימה —
+-- מאפשר תשלום שמכסה רק חלק מהסכום, כשהיתרה הפתוחה יורדת בהתאם.
+alter table tasks add column if not exists paid_amount numeric(10,2) not null default 0;
+
 -- טבלת ביניים: הקלטות טלפון הממתינות לאישור ("טלפונים ממתינים").
 -- הקלטה מהטלפון נשמרת כאן ואינה יוצרת מיד משימה. משימה בטבלת tasks נוצרת
 -- רק בלחיצה על "אשרי והעבירי לניהול משימות". בטוח להרצה חוזרת.

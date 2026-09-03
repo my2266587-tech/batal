@@ -66,6 +66,15 @@ function MeetingBadge({ status }) {
   return <span className={map[status] || "badge-neutral"}>{status || "—"}</span>;
 }
 
+// How much is still owed on a task after any partial payments already
+// recorded against it (paid_amount). Never negative.
+function remainingAmount(t) {
+  const total = Number(t?.total_after_discount) || 0;
+  const paid = Number(t?.paid_amount) || 0;
+  const r = total - paid;
+  return r > 0.009 ? r : 0;
+}
+
 function Field({ label, value }) {
   return (
     <div>
@@ -82,12 +91,11 @@ function TasksSection({
   emptyText,
   onTogglePaid,
   accent,
+  getAmount,
 }) {
   const PAID_VALUES = ["שולם", "לא לחיוב"];
-  const sectionTotal = items.reduce(
-    (s, t) => s + (Number(t.total_after_discount) || 0),
-    0,
-  );
+  const amountFor = getAmount || ((t) => Number(t.total_after_discount) || 0);
+  const sectionTotal = items.reduce((s, t) => s + amountFor(t), 0);
 
   return (
     <section className="card">
@@ -160,7 +168,13 @@ function TasksSection({
                     <td>{t.meeting_type || "—"}</td>
                     <td>{formatDecimalHoursAsHHMM(t.hours)}</td>
                     <td className="font-medium">
-                      {formatCurrency(t.total_after_discount)}
+                      {formatCurrency(amountFor(t))}
+                      {t.payment_status === "שולם חלקית" && (
+                        <div className="text-[11px] text-ink-500 font-normal whitespace-nowrap">
+                          מתוך {formatCurrency(t.total_after_discount)} · שולם{" "}
+                          {formatCurrency(t.paid_amount)}
+                        </div>
+                      )}
                     </td>
                     <td>
                       <PaymentBadge status={t.payment_status} />
@@ -196,10 +210,10 @@ export default function PatientCardPage() {
   const [exportTo, setExportTo] = useState("");
 
   // Record-payment state — she enters an amount that was paid and the
-  // system marks unpaid tasks (oldest debt first) totaling that amount.
+  // system allocates it against unpaid tasks (oldest debt first),
+  // partially paying a task down when the amount doesn't cover it in full.
   const [paymentFormOpen, setPaymentFormOpen] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
-  const [selectedPaymentIds, setSelectedPaymentIds] = useState(new Set());
   const [recordingPayment, setRecordingPayment] = useState(false);
 
   // Upload form state
@@ -571,8 +585,14 @@ export default function PatientCardPage() {
       unpaid = 0;
     exportTasks.forEach((t) => {
       hours += Number(t.hours) || 0;
-      if (isUnpaidStatus(t.payment_status)) unpaid += Number(t.total_after_discount) || 0;
-      else paid += Number(t.total_after_discount) || 0;
+      if (isUnpaidStatus(t.payment_status)) {
+        // Open balance reflects what's actually still owed, not the
+        // task's original price — a partial payment already lowered it.
+        unpaid += remainingAmount(t);
+        paid += Number(t.paid_amount) || 0;
+      } else {
+        paid += Number(t.total_after_discount) || 0;
+      }
     });
     return { hours, paid, unpaid };
   }, [exportTasks]);
@@ -589,9 +609,12 @@ export default function PatientCardPage() {
       before += Number(t.total_before_discount) || 0;
       after += Number(t.total_after_discount) || 0;
       travel += Number(t.travel_payment) || 0;
-      if (isUnpaidStatus(t.payment_status))
-        unpaid += Number(t.total_after_discount) || 0;
-      else paid += Number(t.total_after_discount) || 0;
+      if (isUnpaidStatus(t.payment_status)) {
+        unpaid += remainingAmount(t);
+        paid += Number(t.paid_amount) || 0;
+      } else {
+        paid += Number(t.total_after_discount) || 0;
+      }
     });
     return { hours, before, after, travel, paid, unpaid };
   }, [tasks]);
@@ -600,83 +623,77 @@ export default function PatientCardPage() {
   // a payment against the running balance.
   const unpaidTasksAsc = useMemo(() => [...unpaidTasks].reverse(), [unpaidTasks]);
 
-  function autoSelectForAmount(amount) {
-    const amt = Number(amount) || 0;
-    const ids = new Set();
-    if (amt <= 0) return ids;
-    let sum = 0;
+  // How the entered amount would be applied: walk the open balance
+  // oldest-first, paying each task down fully until the amount runs out —
+  // the last task touched absorbs whatever's left as a partial payment.
+  // No-charge (₪0) tasks have nothing owed, so they're skipped automatically.
+  const paymentAllocation = useMemo(() => {
+    let budget = Number(paymentAmount) || 0;
+    const allocations = [];
     for (const t of unpaidTasksAsc) {
-      const v = Number(t.total_after_discount) || 0;
-      // No-charge tasks (₪0) don't represent debt — skip them instead of
-      // "using up" a slot for free, which used to block real charges behind
-      // them from ever being reached.
-      if (v <= 0.009) continue;
-      if (sum + v <= amt + 0.009) {
-        sum += v;
-        ids.add(t.id);
-      } else {
-        break;
-      }
+      if (budget <= 0.009) break;
+      const before = remainingAmount(t);
+      if (before <= 0.009) continue;
+      const apply = Math.min(budget, before);
+      allocations.push({ task: t, before, apply, after: before - apply });
+      budget -= apply;
     }
-    return ids;
-  }
-
-  // Re-suggest a selection whenever the entered amount changes; manual
-  // checkbox toggles in between are left alone.
-  useEffect(() => {
-    setSelectedPaymentIds(autoSelectForAmount(paymentAmount));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paymentAmount]);
-
-  function togglePaymentSelection(taskId) {
-    setSelectedPaymentIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(taskId)) next.delete(taskId);
-      else next.add(taskId);
-      return next;
-    });
-  }
-
-  const selectedPaymentSum = useMemo(() => {
-    return unpaidTasksAsc
-      .filter((t) => selectedPaymentIds.has(t.id))
-      .reduce((s, t) => s + (Number(t.total_after_discount) || 0), 0);
-  }, [unpaidTasksAsc, selectedPaymentIds]);
-
-  const paymentDiff = useMemo(() => {
-    return (Number(paymentAmount) || 0) - selectedPaymentSum;
-  }, [paymentAmount, selectedPaymentSum]);
+    const leftover = budget > 0.009 ? budget : 0;
+    const totalApplied = allocations.reduce((s, a) => s + a.apply, 0);
+    return { allocations, leftover, totalApplied };
+  }, [paymentAmount, unpaidTasksAsc]);
 
   function closePaymentForm() {
     setPaymentFormOpen(false);
     setPaymentAmount("");
-    setSelectedPaymentIds(new Set());
   }
 
   async function recordPayment() {
-    if (selectedPaymentIds.size === 0) {
-      alert("לא נבחרו משימות לסימון כשולם");
+    const { allocations, leftover, totalApplied } = paymentAllocation;
+    if (allocations.length === 0) {
+      alert("אין סכום לשיוך — הזיני סכום גדול מ-0 כשקיים חוב פתוח.");
       return;
     }
-    if (
-      !confirm(
-        `לסמן ${selectedPaymentIds.size} משימות כ"שולם" בסך ${formatCurrency(
-          selectedPaymentSum,
-        )}?`,
-      )
-    )
-      return;
+    const lines = allocations.map((a) => {
+      const label = (a.task.task_definition || "משימה").slice(0, 50);
+      const tail =
+        a.after > 0.009
+          ? `יישאר לתשלום ${formatCurrency(a.after)}`
+          : "ישולם במלואו";
+      return `• ${label} — ${formatCurrency(a.apply)} (${tail})`;
+    });
+    let msg = `לרשום תשלום של ${formatCurrency(totalApplied)}?\n\n${lines.join("\n")}`;
+    if (leftover > 0.009) {
+      msg += `\n\nלתשומת לבך: ${formatCurrency(
+        leftover,
+      )} מהסכום שהוזן לא שויכו — אין כרגע מספיק חוב פתוח.`;
+    }
+    if (!confirm(msg)) return;
+
     setRecordingPayment(true);
-    const ids = Array.from(selectedPaymentIds);
-    const { error: updErr } = await supabase
-      .from("tasks")
-      .update({ payment_status: "שולם" })
-      .in("id", ids);
-    setRecordingPayment(false);
-    if (updErr) {
-      alert("עדכון סטטוס תשלום נכשל:\n\n" + (updErr.message || JSON.stringify(updErr)));
-      return;
+    for (const a of allocations) {
+      const newPaidAmount = (Number(a.task.paid_amount) || 0) + a.apply;
+      const newStatus = a.after > 0.009 ? "שולם חלקית" : "שולם";
+      const { error: updErr } = await supabase
+        .from("tasks")
+        .update({ paid_amount: newPaidAmount, payment_status: newStatus })
+        .eq("id", a.task.id);
+      if (updErr) {
+        setRecordingPayment(false);
+        const missingColumn =
+          /paid_amount/i.test(updErr.message || "") ||
+          updErr.code === "42703" ||
+          updErr.code === "PGRST204";
+        alert(
+          (missingColumn
+            ? 'עדכון נכשל: בטבלת tasks חסרה העמודה paid_amount. יש להריץ קודם את מיגרציית ה-SQL (migrations/20260903_task_paid_amount.sql) בעורך ה-SQL של Supabase, ואז לנסות שוב.\n\n'
+            : "עדכון תשלום נכשל:\n\n") + (updErr.message || JSON.stringify(updErr)),
+        );
+        loadAll(); // reflect whatever already went through
+        return;
+      }
     }
+    setRecordingPayment(false);
     closePaymentForm();
     loadAll();
   }
@@ -689,10 +706,28 @@ export default function PatientCardPage() {
   async function togglePaymentStatus(task) {
     const currentlyUnpaid = isUnpaidStatus(task.payment_status);
     const newStatus = currentlyUnpaid ? "שולם" : "לא שולם";
-    const { error: updErr } = await supabase
+    // Manually flipping the checkbox settles (or reopens) the task in full,
+    // so paid_amount should follow along — but keep working even before the
+    // paid_amount migration has run, by retrying without it on that one
+    // specific failure instead of breaking the existing toggle.
+    const newPaidAmount = currentlyUnpaid
+      ? Number(task.total_after_discount) || 0
+      : 0;
+    let { error: updErr } = await supabase
       .from("tasks")
-      .update({ payment_status: newStatus })
+      .update({ payment_status: newStatus, paid_amount: newPaidAmount })
       .eq("id", task.id);
+    if (
+      updErr &&
+      (/paid_amount/i.test(updErr.message || "") ||
+        updErr.code === "42703" ||
+        updErr.code === "PGRST204")
+    ) {
+      ({ error: updErr } = await supabase
+        .from("tasks")
+        .update({ payment_status: newStatus })
+        .eq("id", task.id));
+    }
     if (updErr) {
       console.error("[toggle paid] error:", updErr);
       alert(
@@ -711,6 +746,7 @@ export default function PatientCardPage() {
       "סוג פגישה": t.meeting_type || "",
       "שעות": Number(t.hours || 0).toFixed(2),
       "סכום": Number(t.total_after_discount || 0).toFixed(2),
+      "יתרה לתשלום": remainingAmount(t).toFixed(2),
       "סטטוס תשלום": t.payment_status || "לא שולם",
     }));
   }
@@ -772,12 +808,14 @@ export default function PatientCardPage() {
         const st = STATUS_STYLE[status] || STATUS_STYLE["לא שולם"];
         const label = t.task_definition ? escape(t.task_definition.slice(0, 90)) : "—";
         const type = t.meeting_type ? escape(t.meeting_type) : "—";
+        const remaining = remainingAmount(t);
         return `<tr class="${i % 2 === 1 ? "alt" : ""}">
           <td class="nowrap">${escape(formatDate(t.date_gregorian) || "—")}</td>
           <td>${label}</td>
           <td class="nowrap">${type}</td>
           <td class="nowrap num">${escape(formatDecimalHoursAsHHMM(t.hours))}</td>
           <td class="nowrap num amount">${escape(formatCurrency(t.total_after_discount))}</td>
+          <td class="nowrap num">${remaining > 0.009 ? escape(formatCurrency(remaining)) : "—"}</td>
           <td class="nowrap">
             <span class="pill" style="background:${st.bg};color:${st.text};border-color:${st.border}">${escape(status)}</span>
           </td>
@@ -944,6 +982,7 @@ export default function PatientCardPage() {
         <th>סוג פגישה</th>
         <th>שעות</th>
         <th>סכום</th>
+        <th>יתרה לתשלום</th>
         <th>סטטוס תשלום</th>
       </tr>
     </thead>
@@ -953,6 +992,7 @@ export default function PatientCardPage() {
         <td colspan="3" class="label">סה״כ</td>
         <td class="num">${escape(formatDecimalHoursAsHHMM(exportTotals.hours))}</td>
         <td class="num amount">${escape(formatCurrency(totalAmount))}</td>
+        <td class="num amount">${escape(formatCurrency(exportTotals.unpaid))}</td>
         <td></td>
       </tr>
     </tfoot>
@@ -1117,8 +1157,9 @@ export default function PatientCardPage() {
           <div>
             <h2 className="section-title">רישום תשלום</h2>
             <p className="text-xs text-ink-500 mt-1">
-              הזיני סכום שהתקבל — המערכת תציע אילו משימות פתוחות (הוותיקות
-              ביותר קודם) לסמן כשולם, ואפשר לכוונן ידנית לפני האישור.
+              הזיני סכום שהתקבל — המערכת תוריד אותו מהחוב הפתוח, מתחילה
+              מהמשימה הוותיקה ביותר; אם הסכום לא מכסה משימה במלואה היא
+              תסומן "שולם חלקית" והיתרה שלה תרד בהתאם.
             </p>
           </div>
           {!paymentFormOpen && (
@@ -1149,81 +1190,73 @@ export default function PatientCardPage() {
                   autoFocus
                 />
               </div>
-              <div className="text-sm">
-                <div className="text-ink-500">
-                  נבחרו {selectedPaymentIds.size} משימות בסך{" "}
-                  <span className="font-semibold text-ink-900">
-                    {formatCurrency(selectedPaymentSum)}
-                  </span>
-                </div>
-                {Number(paymentAmount) > 0 && (
-                  <div
-                    className={
-                      paymentDiff > 0.009
-                        ? "text-amber-700"
-                        : paymentDiff < -0.009
-                        ? "text-red-700"
-                        : "text-emerald-700"
-                    }
-                  >
-                    {paymentDiff > 0.009
-                      ? `נותרו ${formatCurrency(paymentDiff)} שלא הוקצו למשימות`
-                      : paymentDiff < -0.009
-                      ? `הנבחרות עולות ב-${formatCurrency(-paymentDiff)} על הסכום שהוזן`
-                      : "התאמה מלאה לסכום שהוזן"}
+              {Number(paymentAmount) > 0 && (
+                <div className="text-sm">
+                  <div className="text-ink-500">
+                    יוקצו {formatCurrency(paymentAllocation.totalApplied)} ל-
+                    {paymentAllocation.allocations.length} משימות
                   </div>
-                )}
-              </div>
+                  {paymentAllocation.leftover > 0.009 && (
+                    <div className="text-amber-700">
+                      {formatCurrency(paymentAllocation.leftover)} מהסכום לא
+                      ניתן לשיוך — אין מספיק חוב פתוח
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
-            <div className="overflow-x-auto border border-line rounded-md max-h-80 overflow-y-auto">
-              <table className="table-base">
-                <thead>
-                  <tr>
-                    <th className="w-16 text-center">בחר</th>
-                    <th>תאריך</th>
-                    <th>משימה</th>
-                    <th>תשלום</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {unpaidTasksAsc.map((t) => (
-                    <tr key={t.id}>
-                      <td className="text-center">
-                        <input
-                          type="checkbox"
-                          checked={selectedPaymentIds.has(t.id)}
-                          onChange={() => togglePaymentSelection(t.id)}
-                          className="w-4 h-4 accent-accent-600 cursor-pointer"
-                        />
-                      </td>
-                      <td className="whitespace-nowrap">
-                        {formatDate(t.date_gregorian) || "—"}
-                      </td>
-                      <td className="max-w-xs">
-                        <div className="line-clamp-1 text-sm">
-                          {t.task_definition || "—"}
-                        </div>
-                      </td>
-                      <td className="font-medium">
-                        {formatCurrency(t.total_after_discount)}
-                      </td>
+            {paymentAllocation.allocations.length > 0 && (
+              <div className="overflow-x-auto border border-line rounded-md max-h-80 overflow-y-auto">
+                <table className="table-base">
+                  <thead>
+                    <tr>
+                      <th>תאריך</th>
+                      <th>משימה</th>
+                      <th>יתרה לפני</th>
+                      <th>מוקצה עכשיו</th>
+                      <th>יתרה אחרי</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {paymentAllocation.allocations.map(({ task: t, before, apply, after }) => (
+                      <tr key={t.id}>
+                        <td className="whitespace-nowrap">
+                          {formatDate(t.date_gregorian) || "—"}
+                        </td>
+                        <td className="max-w-xs">
+                          <div className="line-clamp-1 text-sm">
+                            {t.task_definition || "—"}
+                          </div>
+                        </td>
+                        <td>{formatCurrency(before)}</td>
+                        <td className="font-medium text-emerald-700">
+                          {formatCurrency(apply)}
+                        </td>
+                        <td>
+                          {after > 0.009 ? (
+                            formatCurrency(after)
+                          ) : (
+                            <span className="badge-success">שולם במלואו</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             <div className="flex gap-3">
               <button
                 type="button"
                 className="btn-primary"
                 onClick={recordPayment}
-                disabled={recordingPayment || selectedPaymentIds.size === 0}
+                disabled={recordingPayment || paymentAllocation.allocations.length === 0}
               >
                 {recordingPayment
-                  ? "מסמן..."
-                  : `סימון ${selectedPaymentIds.size} משימות כשולם`}
+                  ? "רושם..."
+                  : `רישום תשלום של ${formatCurrency(paymentAllocation.totalApplied)}`}
               </button>
               <button
                 type="button"
@@ -1317,6 +1350,7 @@ export default function PatientCardPage() {
         emptyText="אין משימות לא שולמו"
         onTogglePaid={togglePaymentStatus}
         accent="open"
+        getAmount={remainingAmount}
       />
 
       <TasksSection
