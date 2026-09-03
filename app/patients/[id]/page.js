@@ -195,6 +195,13 @@ export default function PatientCardPage() {
   const [exportFrom, setExportFrom] = useState("");
   const [exportTo, setExportTo] = useState("");
 
+  // Record-payment state — she enters an amount that was paid and the
+  // system marks unpaid tasks (oldest debt first) totaling that amount.
+  const [paymentFormOpen, setPaymentFormOpen] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [selectedPaymentIds, setSelectedPaymentIds] = useState(new Set());
+  const [recordingPayment, setRecordingPayment] = useState(false);
+
   // Upload form state
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadDocType, setUploadDocType] = useState("");
@@ -588,6 +595,87 @@ export default function PatientCardPage() {
     });
     return { hours, before, after, travel, paid, unpaid };
   }, [tasks]);
+
+  // Oldest unpaid debt first — the natural order to pay off when recording
+  // a payment against the running balance.
+  const unpaidTasksAsc = useMemo(() => [...unpaidTasks].reverse(), [unpaidTasks]);
+
+  function autoSelectForAmount(amount) {
+    const amt = Number(amount) || 0;
+    const ids = new Set();
+    if (amt <= 0) return ids;
+    let sum = 0;
+    for (const t of unpaidTasksAsc) {
+      const v = Number(t.total_after_discount) || 0;
+      if (sum + v <= amt + 0.009) {
+        sum += v;
+        ids.add(t.id);
+      } else {
+        break;
+      }
+    }
+    return ids;
+  }
+
+  // Re-suggest a selection whenever the entered amount changes; manual
+  // checkbox toggles in between are left alone.
+  useEffect(() => {
+    setSelectedPaymentIds(autoSelectForAmount(paymentAmount));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paymentAmount]);
+
+  function togglePaymentSelection(taskId) {
+    setSelectedPaymentIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }
+
+  const selectedPaymentSum = useMemo(() => {
+    return unpaidTasksAsc
+      .filter((t) => selectedPaymentIds.has(t.id))
+      .reduce((s, t) => s + (Number(t.total_after_discount) || 0), 0);
+  }, [unpaidTasksAsc, selectedPaymentIds]);
+
+  const paymentDiff = useMemo(() => {
+    return (Number(paymentAmount) || 0) - selectedPaymentSum;
+  }, [paymentAmount, selectedPaymentSum]);
+
+  function closePaymentForm() {
+    setPaymentFormOpen(false);
+    setPaymentAmount("");
+    setSelectedPaymentIds(new Set());
+  }
+
+  async function recordPayment() {
+    if (selectedPaymentIds.size === 0) {
+      alert("לא נבחרו משימות לסימון כשולם");
+      return;
+    }
+    if (
+      !confirm(
+        `לסמן ${selectedPaymentIds.size} משימות כ"שולם" בסך ${formatCurrency(
+          selectedPaymentSum,
+        )}?`,
+      )
+    )
+      return;
+    setRecordingPayment(true);
+    const ids = Array.from(selectedPaymentIds);
+    const { error: updErr } = await supabase
+      .from("tasks")
+      .update({ payment_status: "שולם" })
+      .in("id", ids);
+    setRecordingPayment(false);
+    if (updErr) {
+      alert("עדכון סטטוס תשלום נכשל:\n\n" + (updErr.message || JSON.stringify(updErr)));
+      return;
+    }
+    closePaymentForm();
+    loadAll();
+  }
 
   const documents = useMemo(
     () => tasks.filter((t) => t.documents_url && t.documents_url.trim() !== ""),
@@ -1018,6 +1106,132 @@ export default function PatientCardPage() {
           <div className="stat-label">פתוח לתשלום</div>
           <div className="stat-value">{formatCurrency(totals.unpaid)}</div>
         </div>
+      </section>
+
+      <section className="card p-5">
+        <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+          <div>
+            <h2 className="section-title">רישום תשלום</h2>
+            <p className="text-xs text-ink-500 mt-1">
+              הזיני סכום שהתקבל — המערכת תציע אילו משימות פתוחות (הוותיקות
+              ביותר קודם) לסמן כשולם, ואפשר לכוונן ידנית לפני האישור.
+            </p>
+          </div>
+          {!paymentFormOpen && (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => setPaymentFormOpen(true)}
+              disabled={unpaidTasks.length === 0}
+              title={unpaidTasks.length === 0 ? "אין משימות פתוחות לתשלום" : undefined}
+            >
+              + רישום תשלום
+            </button>
+          )}
+        </div>
+
+        {paymentFormOpen && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-end gap-4">
+              <div>
+                <label className="label">סכום ששולם (₪)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  className="input"
+                  value={paymentAmount}
+                  onChange={(e) => setPaymentAmount(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div className="text-sm">
+                <div className="text-ink-500">
+                  נבחרו {selectedPaymentIds.size} משימות בסך{" "}
+                  <span className="font-semibold text-ink-900">
+                    {formatCurrency(selectedPaymentSum)}
+                  </span>
+                </div>
+                {Number(paymentAmount) > 0 && (
+                  <div
+                    className={
+                      paymentDiff > 0.009
+                        ? "text-amber-700"
+                        : paymentDiff < -0.009
+                        ? "text-red-700"
+                        : "text-emerald-700"
+                    }
+                  >
+                    {paymentDiff > 0.009
+                      ? `נותרו ${formatCurrency(paymentDiff)} שלא הוקצו למשימות`
+                      : paymentDiff < -0.009
+                      ? `הנבחרות עולות ב-${formatCurrency(-paymentDiff)} על הסכום שהוזן`
+                      : "התאמה מלאה לסכום שהוזן"}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="overflow-x-auto border border-line rounded-md max-h-80 overflow-y-auto">
+              <table className="table-base">
+                <thead>
+                  <tr>
+                    <th className="w-16 text-center">בחר</th>
+                    <th>תאריך</th>
+                    <th>משימה</th>
+                    <th>תשלום</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {unpaidTasksAsc.map((t) => (
+                    <tr key={t.id}>
+                      <td className="text-center">
+                        <input
+                          type="checkbox"
+                          checked={selectedPaymentIds.has(t.id)}
+                          onChange={() => togglePaymentSelection(t.id)}
+                          className="w-4 h-4 accent-accent-600 cursor-pointer"
+                        />
+                      </td>
+                      <td className="whitespace-nowrap">
+                        {formatDate(t.date_gregorian) || "—"}
+                      </td>
+                      <td className="max-w-xs">
+                        <div className="line-clamp-1 text-sm">
+                          {t.task_definition || "—"}
+                        </div>
+                      </td>
+                      <td className="font-medium">
+                        {formatCurrency(t.total_after_discount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={recordPayment}
+                disabled={recordingPayment || selectedPaymentIds.size === 0}
+              >
+                {recordingPayment
+                  ? "מסמן..."
+                  : `סימון ${selectedPaymentIds.size} משימות כשולם`}
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={closePaymentForm}
+                disabled={recordingPayment}
+              >
+                ביטול
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="card p-5">
