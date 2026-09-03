@@ -197,6 +197,7 @@ export default function PatientCardPage() {
 
   const [patient, setPatient] = useState(null);
   const [tasks, setTasks] = useState([]);
+  const [payments, setPayments] = useState([]);
   const [docs, setDocs] = useState([]);
   const [linkedContacts, setLinkedContacts] = useState([]);
   const [allContacts, setAllContacts] = useState([]);
@@ -244,7 +245,7 @@ export default function PatientCardPage() {
 
   async function loadAll() {
     setLoading(true);
-    const [pRes, tRes, dRes, pcRes, cRes] = await Promise.all([
+    const [pRes, tRes, dRes, pcRes, cRes, payRes] = await Promise.all([
       supabase.from("patients").select("*").eq("id", id).maybeSingle(),
       supabase
         .from("tasks")
@@ -264,17 +265,27 @@ export default function PatientCardPage() {
         .eq("patient_id", id)
         .order("created_at", { ascending: false }),
       supabase.from("contacts").select("*").order("full_name"),
+      supabase
+        .from("payments")
+        .select("*")
+        .eq("patient_id", id)
+        .order("paid_at", { ascending: false })
+        .order("created_at", { ascending: false }),
     ]);
     if (pRes.error) setError(pRes.error.message);
     if (tRes.error) setError(tRes.error.message);
     if (dRes.error) setError(dRes.error.message);
     if (pcRes.error) setError(pcRes.error.message);
     if (cRes.error) setError(cRes.error.message);
+    // Payments history is additive (migrations/20260903_payments_history.sql) —
+    // don't block the whole page on it if that migration hasn't run yet.
+    if (payRes.error) console.warn("[payments history] load failed:", payRes.error);
     setPatient(pRes.data || null);
     setTasks(tRes.data || []);
     setDocs(dRes.data || []);
     setLinkedContacts(pcRes.data || []);
     setAllContacts(cRes.data || []);
+    setPayments(payRes.error ? [] : payRes.data || []);
     setLoading(false);
   }
 
@@ -693,6 +704,35 @@ export default function PatientCardPage() {
         return;
       }
     }
+
+    // Log the payment itself as its own record — so a partial payment
+    // stays visible even though the task it touched didn't move to "paid".
+    const { error: payErr } = await supabase.from("payments").insert([
+      {
+        patient_id: id,
+        amount: totalApplied,
+        paid_at: new Date().toISOString().slice(0, 10),
+        allocations: allocations.map((a) => ({
+          task_id: a.task.id,
+          task_definition: a.task.task_definition || null,
+          date_gregorian: a.task.date_gregorian || null,
+          amount: a.apply,
+          fully_paid: a.after <= 0.009,
+        })),
+      },
+    ]);
+    if (payErr) {
+      console.warn("[payments history] insert failed:", payErr);
+      const missingTable = /payments/i.test(payErr.message || "") || payErr.code === "PGRST205";
+      alert(
+        `התשלום נרשם בהצלחה על המשימות (${formatCurrency(totalApplied)}), אבל שמירתו בהיסטוריית התשלומים נכשלה.\n\n` +
+          (missingTable
+            ? 'יש להריץ את מיגרציית ה-SQL (migrations/20260903_payments_history.sql) בעורך ה-SQL של Supabase, ואז התשלומים הבאים יופיעו בהיסטוריה.\n\n'
+            : "") +
+          (payErr.message || JSON.stringify(payErr)),
+      );
+    }
+
     setRecordingPayment(false);
     closePaymentForm();
     loadAll();
@@ -1269,6 +1309,50 @@ export default function PatientCardPage() {
             </div>
           </div>
         )}
+      </section>
+
+      <section className="card">
+        <div className="px-6 py-5 border-b border-line">
+          <h2 className="section-title">היסטוריית תשלומים ({payments.length})</h2>
+          <p className="text-xs text-ink-500 mt-1">
+            כל תשלום שנרשמה עבורו — כולל תשלום שכיסה רק חלק ממשימה.
+          </p>
+        </div>
+        <div className="divide-y divide-line">
+          {payments.length === 0 ? (
+            <p className="p-6 text-sm text-ink-500 text-center">
+              עדיין לא נרשמו תשלומים דרך "רישום תשלום".
+            </p>
+          ) : (
+            payments.map((p) => (
+              <div key={p.id} className="p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-ink-500 whitespace-nowrap">
+                    {formatDate(p.paid_at)}
+                  </span>
+                  <span className="font-semibold text-emerald-700 tabular-nums">
+                    {formatCurrency(p.amount)}
+                  </span>
+                </div>
+                {Array.isArray(p.allocations) && p.allocations.length > 0 && (
+                  <ul className="mt-1.5 text-xs text-ink-500 space-y-0.5">
+                    {p.allocations.map((a, i) => (
+                      <li key={i}>
+                        •{" "}
+                        {(a.task_definition || "משימה").slice(0, 70)}
+                        {a.date_gregorian ? ` (${formatDate(a.date_gregorian)})` : ""} —{" "}
+                        <span className="font-medium text-ink-700">
+                          {formatCurrency(a.amount)}
+                        </span>{" "}
+                        {a.fully_paid ? "· שולם במלואו" : "· תשלום חלקי"}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))
+          )}
+        </div>
       </section>
 
       <section className="card p-5">

@@ -116,6 +116,22 @@ create table if not exists ivr_sessions (
 create index if not exists ivr_sessions_updated_idx on ivr_sessions (updated_at desc);
 
 -- =========================================
+-- היסטוריית תשלומים (ראו migrations/20260903_payments_history.sql)
+-- שורה אחת לכל "רישום תשלום" בכרטיס מטופל — תאריך, סכום, ותמונת מצב של
+-- אילו משימות הסכום כיסה. נשארת גלויה גם כשהתשלום כיסה רק חלק ממשימה.
+-- =========================================
+create table if not exists payments (
+  id uuid primary key default gen_random_uuid(),
+  patient_id uuid not null references patients(id) on delete cascade,
+  amount numeric(10,2) not null,
+  paid_at date not null default current_date,
+  allocations jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists payments_patient_idx on payments (patient_id);
+create index if not exists payments_paid_at_idx on payments (paid_at desc);
+
+-- =========================================
 -- קופה / רישום כספים
 -- =========================================
 create table if not exists cash_records (
@@ -135,6 +151,7 @@ create index if not exists cash_records_date_idx on cash_records (date desc);
 -- =========================================
 alter table patients enable row level security;
 alter table tasks enable row level security;
+alter table payments enable row level security;
 alter table cash_records enable row level security;
 alter table ivr_sessions enable row level security;
 alter table phone_recordings enable row level security;
@@ -144,6 +161,9 @@ create policy "patients_all" on patients for all using (true) with check (true);
 
 drop policy if exists "tasks_all" on tasks;
 create policy "tasks_all" on tasks for all using (true) with check (true);
+
+drop policy if exists "payments_all" on payments;
+create policy "payments_all" on payments for all using (true) with check (true);
 
 drop policy if exists "cash_all" on cash_records;
 create policy "cash_all" on cash_records for all using (true) with check (true);
