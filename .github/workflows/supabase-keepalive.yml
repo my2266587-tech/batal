@@ -28,7 +28,7 @@ jobs:
     steps:
       - name: Ping Supabase Auth health endpoint
         env:
-          SUPABASE_URL: "https://jsqhlihtiagkttecszag.supabase.co"
+          SUPABASE_URL: https://jsqhlihtiagkttecszag.supabase.co
           # Public anon/publishable key (sb_publishable_*). Safe to commit:
           # it is already exposed in the deployed app's client bundle and is
           # gated by row-level security. NEVER put the service_role key here.
