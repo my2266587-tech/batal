@@ -6,12 +6,14 @@ import { useParams, useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
+import MultiFilePicker from "@/components/MultiFilePicker";
 import { DeleteIcon, DocumentIcon, EditIcon, IconButton } from "@/components/Icons";
 import {
   formatCurrency,
   formatDate,
   formatDecimalHoursAsHHMM,
 } from "@/lib/format";
+import { uploadPatientDocuments } from "@/lib/patientDocuments";
 
 function sanitize(name) {
   return String(name || "file")
@@ -37,14 +39,6 @@ function describeError(err, label) {
   if (err.hint) parts.push(`hint: ${err.hint}`);
   const text = parts.length ? parts.join(" — ") : JSON.stringify(err);
   return `${label}: ${text}`;
-}
-
-function fullDump(err) {
-  try {
-    return JSON.stringify(err, Object.getOwnPropertyNames(err || {}), 2);
-  } catch {
-    return String(err);
-  }
 }
 
 function PaymentBadge({ status }) {
@@ -221,7 +215,8 @@ export default function PatientCardPage() {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadDocType, setUploadDocType] = useState("");
   const [uploadNotes, setUploadNotes] = useState("");
-  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadFiles, setUploadFiles] = useState([]);
+  const [uploadProgress, setUploadProgress] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
 
@@ -414,104 +409,43 @@ export default function PatientCardPage() {
   function resetUpload() {
     setUploadDocType("");
     setUploadNotes("");
-    setUploadFile(null);
+    setUploadFiles([]);
     setUploadError("");
   }
 
   async function handleUpload(e) {
     e.preventDefault();
-    if (!uploadFile) {
-      setUploadError("יש לבחור קובץ");
-      alert("יש לבחור קובץ");
+    if (!uploadFiles.length) {
+      setUploadError("יש לבחור לפחות קובץ אחד");
       return;
     }
     setUploadError("");
     setUploading(true);
-
-    // === STEP 1: session check ===
-    const { data: sessionData, error: sessErr } = await supabase.auth.getSession();
-    console.log("[upload step 1] session:", sessionData, "err:", sessErr);
-    if (sessErr || !sessionData?.session) {
-      const msg = "STEP 1 — אין סשן פעיל. " + describeError(sessErr, "שגיאה");
-      alert(msg + "\n\n" + fullDump(sessErr));
-      setUploadError(msg);
-      setUploading(false);
-      return;
-    }
-    const userEmail = sessionData.session.user?.email;
-    console.log("[upload step 1] user email:", userEmail);
-
-    // === STEP 2: authorization check (calls is_authorized RPC) ===
-    const { data: isAuth, error: authErr } = await supabase.rpc("is_authorized");
-    console.log("[upload step 2] is_authorized:", isAuth, "err:", authErr);
-    if (authErr) {
-      const msg =
-        "STEP 2 — הקריאה ל-is_authorized נכשלה. " +
-        describeError(authErr, "שגיאה");
-      alert(msg + "\n\n" + fullDump(authErr));
-      setUploadError(msg);
-      setUploading(false);
-      return;
-    }
-    if (!isAuth) {
-      const msg = `STEP 2 — המשתמש ${userEmail} אינו מורשה (is_authorized=false). ודאי שהוא ברשימה authorized_users עם is_active=true.`;
-      alert(msg);
-      setUploadError(msg);
-      setUploading(false);
-      return;
-    }
-
-    // === STEP 3: upload to Storage ===
-    const path = `patient-docs/${id}/${Date.now()}_${sanitize(uploadFile.name)}`;
-    console.log("[upload step 3] bucket=documents path=", path);
-    const { data: up, error: upErr } = await supabase.storage
-      .from("documents")
-      .upload(path, uploadFile, { upsert: false });
-    if (upErr) {
-      console.error("[upload step 3] storage error:", upErr);
-      console.error("[upload step 3] full dump:", fullDump(upErr));
-      const msg =
-        "STEP 3 — Storage נכשל. " +
-        describeError(upErr, "שגיאה מ-Supabase Storage");
-      alert(msg + "\n\n" + fullDump(upErr));
-      setUploadError(msg);
-      setUploading(false);
-      return;
-    }
-    console.log("[upload step 3] storage ok:", up);
-
-    // === STEP 4: getPublicUrl ===
-    const { data: pub } = supabase.storage
-      .from("documents")
-      .getPublicUrl(up.path);
-    const file_url = pub?.publicUrl;
-    console.log("[upload step 4] file_url:", file_url);
-
-    // === STEP 5: insert metadata row ===
-    const { error: insErr } = await supabase.from("patient_documents").insert([
-      {
-        patient_id: id,
-        doc_type: uploadDocType || null,
-        notes: uploadNotes || null,
-        file_url,
-      },
-    ]);
-    if (insErr) {
-      console.error("[upload step 5] db insert error:", insErr);
-      console.error("[upload step 5] full dump:", fullDump(insErr));
-      const msg =
-        "STEP 5 — insert ל-patient_documents נכשל. " +
-        describeError(insErr, "שגיאה מ-DB");
-      alert(msg + "\n\n" + fullDump(insErr));
-      setUploadError(msg);
-      setUploading(false);
-      return;
-    }
-    console.log("[upload step 5] db insert ok");
+    const res = await uploadPatientDocuments({
+      patientId: id,
+      files: uploadFiles,
+      docType: uploadDocType,
+      notes: uploadNotes,
+      onProgress: (n, total) => setUploadProgress(`${n}/${total}`),
+    });
     setUploading(false);
+    setUploadProgress("");
+    if (res.fatal) {
+      setUploadError(res.fatal);
+      return;
+    }
+    if (res.uploaded) loadAll();
+    if (res.failures.length) {
+      // Keep only the failed files in the list so the user can retry them.
+      setUploadFiles(res.failures.map((f) => f.file));
+      setUploadError(
+        `הועלו ${res.uploaded} מתוך ${res.uploaded + res.failures.length} קבצים. נכשלו:\n` +
+          res.failures.map((f) => `• ${f.file.name} — ${f.message}`).join("\n"),
+      );
+      return;
+    }
     setUploadOpen(false);
     resetUpload();
-    loadAll();
   }
 
   async function deleteDoc(doc) {
@@ -1738,7 +1672,7 @@ export default function PatientCardPage() {
               className="btn-primary"
               onClick={() => setUploadOpen(true)}
             >
-              + העלאת מסמך
+              + העלאת מסמכים
             </button>
           )}
         </div>
@@ -1759,14 +1693,11 @@ export default function PatientCardPage() {
                 />
               </div>
               <div>
-                <label className="label">קובץ *</label>
-                <input
-                  type="file"
-                  className="text-sm"
-                  onChange={(e) =>
-                    setUploadFile(e.target.files?.[0] || null)
-                  }
-                  required
+                <label className="label">קבצים *</label>
+                <MultiFilePicker
+                  files={uploadFiles}
+                  onChange={setUploadFiles}
+                  disabled={uploading}
                 />
               </div>
               <div className="md:col-span-2">
@@ -1789,7 +1720,11 @@ export default function PatientCardPage() {
                 className="btn-primary"
                 disabled={uploading}
               >
-                {uploading ? "מעלה..." : "העלאה ושמירה"}
+                {uploading
+                  ? `מעלה ${uploadProgress}...`
+                  : uploadFiles.length > 1
+                    ? `העלאת ${uploadFiles.length} קבצים`
+                    : "העלאה ושמירה"}
               </button>
               <button
                 type="button"
@@ -1808,7 +1743,7 @@ export default function PatientCardPage() {
         <div className="p-6">
           {docs.length === 0 && documents.length === 0 ? (
             <p className="text-sm text-ink-500">
-              אין עדיין מסמכים — לחצי על "העלאת מסמך" כדי להוסיף את הראשון.
+              אין עדיין מסמכים — לחצי על "העלאת מסמכים" כדי להוסיף את הראשון.
             </p>
           ) : (
             <ul className="space-y-2">

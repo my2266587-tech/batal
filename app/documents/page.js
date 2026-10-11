@@ -3,41 +3,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
-import { DeleteIcon, DocumentIcon, IconButton } from "@/components/Icons";
+import { DeleteIcon, IconButton } from "@/components/Icons";
+import MultiFilePicker from "@/components/MultiFilePicker";
 import { formatDate } from "@/lib/format";
-
-function sanitize(name) {
-  return String(name || "file")
-    .replace(/[^a-zA-Z0-9א-ת._-]+/g, "_")
-    .slice(0, 80);
-}
+import { describeError, uploadPatientDocuments } from "@/lib/patientDocuments";
 
 function storagePathFromUrl(url) {
   const m = String(url || "").match(
     /\/storage\/v1\/object\/public\/documents\/(.+)$/,
   );
   return m ? decodeURIComponent(m[1]) : null;
-}
-
-function describeError(err, label) {
-  if (!err) return "";
-  const parts = [];
-  if (err.message) parts.push(err.message);
-  if (err.error) parts.push(err.error);
-  if (err.statusCode) parts.push(`status ${err.statusCode}`);
-  if (err.code) parts.push(`code ${err.code}`);
-  if (err.details) parts.push(err.details);
-  if (err.hint) parts.push(`hint: ${err.hint}`);
-  const text = parts.length ? parts.join(" — ") : JSON.stringify(err);
-  return `${label}: ${text}`;
-}
-
-function fullDump(err) {
-  try {
-    return JSON.stringify(err, Object.getOwnPropertyNames(err || {}), 2);
-  } catch {
-    return String(err);
-  }
 }
 
 export default function DocumentsPage() {
@@ -54,7 +29,8 @@ export default function DocumentsPage() {
   const [uPatientId, setUPatientId] = useState("");
   const [uDocType, setUDocType] = useState("");
   const [uNotes, setUNotes] = useState("");
-  const [uFile, setUFile] = useState(null);
+  const [uFiles, setUFiles] = useState([]);
+  const [uploadProgress, setUploadProgress] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
 
@@ -140,7 +116,7 @@ export default function DocumentsPage() {
     setUPatientId("");
     setUDocType("");
     setUNotes("");
-    setUFile(null);
+    setUFiles([]);
     setUploadError("");
   }
 
@@ -148,97 +124,39 @@ export default function DocumentsPage() {
     e.preventDefault();
     if (!uPatientId) {
       setUploadError("יש לבחור מטופל");
-      alert("יש לבחור מטופל");
       return;
     }
-    if (!uFile) {
-      setUploadError("יש לבחור קובץ");
-      alert("יש לבחור קובץ");
+    if (!uFiles.length) {
+      setUploadError("יש לבחור לפחות קובץ אחד");
       return;
     }
     setUploadError("");
     setUploading(true);
-
-    // STEP 1: session
-    const { data: sessionData, error: sessErr } = await supabase.auth.getSession();
-    console.log("[upload step 1] session:", sessionData, "err:", sessErr);
-    if (sessErr || !sessionData?.session) {
-      const msg = "STEP 1 — אין סשן פעיל. " + describeError(sessErr, "שגיאה");
-      alert(msg + "\n\n" + fullDump(sessErr));
-      setUploadError(msg);
-      setUploading(false);
-      return;
-    }
-    const userEmail = sessionData.session.user?.email;
-
-    // STEP 2: authorization
-    const { data: isAuth, error: authErr } = await supabase.rpc("is_authorized");
-    console.log("[upload step 2] is_authorized:", isAuth, "err:", authErr);
-    if (authErr) {
-      const msg =
-        "STEP 2 — is_authorized נכשל. " + describeError(authErr, "שגיאה");
-      alert(msg + "\n\n" + fullDump(authErr));
-      setUploadError(msg);
-      setUploading(false);
-      return;
-    }
-    if (!isAuth) {
-      const msg = `STEP 2 — המשתמש ${userEmail} אינו מורשה.`;
-      alert(msg);
-      setUploadError(msg);
-      setUploading(false);
-      return;
-    }
-
-    // STEP 3: storage upload
-    const path = `patient-docs/${uPatientId}/${Date.now()}_${sanitize(uFile.name)}`;
-    console.log("[upload step 3] bucket=documents path=", path);
-    const { data: up, error: upErr } = await supabase.storage
-      .from("documents")
-      .upload(path, uFile, { upsert: false });
-    if (upErr) {
-      console.error("[upload step 3] storage error:", upErr);
-      console.error("[upload step 3] full dump:", fullDump(upErr));
-      const msg =
-        "STEP 3 — Storage נכשל. " +
-        describeError(upErr, "שגיאה מ-Supabase Storage");
-      alert(msg + "\n\n" + fullDump(upErr));
-      setUploadError(msg);
-      setUploading(false);
-      return;
-    }
-
-    // STEP 4: public URL
-    const { data: pub } = supabase.storage
-      .from("documents")
-      .getPublicUrl(up.path);
-    const file_url = pub?.publicUrl;
-    console.log("[upload step 4] file_url:", file_url);
-
-    // STEP 5: insert metadata
-    const { error: insErr } = await supabase.from("patient_documents").insert([
-      {
-        patient_id: uPatientId,
-        doc_type: uDocType || null,
-        notes: uNotes || null,
-        file_url,
-      },
-    ]);
-    if (insErr) {
-      console.error("[upload step 5] db insert error:", insErr);
-      console.error("[upload step 5] full dump:", fullDump(insErr));
-      const msg =
-        "STEP 5 — insert ל-patient_documents נכשל. " +
-        describeError(insErr, "שגיאה מ-DB");
-      alert(msg + "\n\n" + fullDump(insErr));
-      setUploadError(msg);
-      setUploading(false);
-      return;
-    }
+    const res = await uploadPatientDocuments({
+      patientId: uPatientId,
+      files: uFiles,
+      docType: uDocType,
+      notes: uNotes,
+      onProgress: (n, total) => setUploadProgress(`${n}/${total}`),
+    });
     setUploading(false);
+    setUploadProgress("");
+    if (res.fatal) {
+      setUploadError(res.fatal);
+      return;
+    }
+    if (res.uploaded) loadAll();
+    if (res.failures.length) {
+      // Keep only the failed files in the list so the user can retry them.
+      setUFiles(res.failures.map((f) => f.file));
+      setUploadError(
+        `הועלו ${res.uploaded} מתוך ${res.uploaded + res.failures.length} קבצים. נכשלו:\n` +
+          res.failures.map((f) => `• ${f.file.name} — ${f.message}`).join("\n"),
+      );
+      return;
+    }
     setUploadOpen(false);
     resetUpload();
-    loadAll();
   }
 
   async function deleteDoc(doc) {
@@ -295,7 +213,7 @@ export default function DocumentsPage() {
                 setUploadOpen(true);
               }}
             >
-              + העלאת מסמך
+              + העלאת מסמכים
             </button>
           )}
         </div>
@@ -303,7 +221,7 @@ export default function DocumentsPage() {
 
       {uploadOpen && (
         <form onSubmit={handleUpload} className="card p-6 space-y-5">
-          <h2 className="section-title">העלאת מסמך</h2>
+          <h2 className="section-title">העלאת מסמכים</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div>
               <label className="label">מטופל *</label>
@@ -331,12 +249,11 @@ export default function DocumentsPage() {
               />
             </div>
             <div className="md:col-span-2">
-              <label className="label">קובץ *</label>
-              <input
-                type="file"
-                className="text-sm"
-                onChange={(e) => setUFile(e.target.files?.[0] || null)}
-                required
+              <label className="label">קבצים *</label>
+              <MultiFilePicker
+                files={uFiles}
+                onChange={setUFiles}
+                disabled={uploading}
               />
             </div>
             <div className="md:col-span-2">
@@ -359,7 +276,11 @@ export default function DocumentsPage() {
               className="btn-primary"
               disabled={uploading}
             >
-              {uploading ? "מעלה..." : "העלאה ושמירה"}
+              {uploading
+                ? `מעלה ${uploadProgress}...`
+                : uFiles.length > 1
+                  ? `העלאת ${uFiles.length} קבצים`
+                  : "העלאה ושמירה"}
             </button>
             <button
               type="button"
@@ -423,7 +344,7 @@ export default function DocumentsPage() {
             ) : totalCount === 0 ? (
               <tr>
                 <td colSpan={7} className="text-center text-ink-500 py-8">
-                  אין מסמכים להצגה — לחצי "+ העלאת מסמך" כדי להוסיף.
+                  אין מסמכים להצגה — לחצי "+ העלאת מסמכים" כדי להוסיף.
                 </td>
               </tr>
             ) : (
