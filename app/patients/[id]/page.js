@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
@@ -84,6 +84,7 @@ function TasksSection({
   items,
   emptyText,
   onTogglePaid,
+  onDelete,
   accent,
   getAmount,
 }) {
@@ -128,12 +129,13 @@ function TasksSection({
               <th>שעות</th>
               <th>תשלום</th>
               <th>סטטוס</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {items.length === 0 ? (
               <tr>
-                <td colSpan={7} className="text-center text-ink-500 py-8">
+                <td colSpan={8} className="text-center text-ink-500 py-8">
                   {emptyText}
                 </td>
               </tr>
@@ -173,6 +175,17 @@ function TasksSection({
                     <td>
                       <PaymentBadge status={t.payment_status} />
                     </td>
+                    <td>
+                      <div className="flex justify-end">
+                        <IconButton
+                          variant="delete"
+                          title="מחיקת השורה"
+                          onClick={() => onDelete(t)}
+                        >
+                          <DeleteIcon />
+                        </IconButton>
+                      </div>
+                    </td>
                   </tr>
                 );
               })
@@ -181,6 +194,79 @@ function TasksSection({
         </table>
       </div>
     </section>
+  );
+}
+
+// In-app confirmation before deleting a charge row. Focus starts on
+// "ביטול" and Esc closes, so a stray Enter never deletes anything.
+function DeleteTaskDialog({ task, deleting, error, onCancel, onConfirm }) {
+  const cancelRef = useRef(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape" && !deleting) onCancel();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [deleting, onCancel]);
+
+  const paid = Number(task.paid_amount) || 0;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={() => !deleting && onCancel()}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-task-title"
+        className="card w-full max-w-md p-6 space-y-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 id="delete-task-title" className="section-title">
+          למחוק את השורה?
+        </h2>
+        <div className="text-sm text-ink-900 space-y-1">
+          <div>{task.task_definition || "משימה"}</div>
+          <div className="text-ink-500">
+            {formatDate(task.date_gregorian) || "ללא תאריך"} ·{" "}
+            {formatCurrency(task.total_after_discount)}
+          </div>
+        </div>
+        {paid > 0.009 && (
+          <p className="text-sm text-amber-700">
+            על השורה הזו כבר נרשם תשלום של {formatCurrency(paid)}. אחרי המחיקה
+            הסכום הזה לא ייזקף לשום חיוב אחר (הוא יישאר רק בהיסטוריית
+            התשלומים).
+          </p>
+        )}
+        <p className="text-xs text-ink-500">אי אפשר לבטל את המחיקה.</p>
+        {error && <p className="text-red-700 text-sm">{error}</p>}
+        <div className="flex gap-3 justify-end">
+          <button
+            ref={cancelRef}
+            type="button"
+            className="btn-ghost"
+            onClick={onCancel}
+            disabled={deleting}
+          >
+            ביטול
+          </button>
+          <button
+            type="button"
+            className="btn-primary bg-red-600 hover:bg-red-700"
+            onClick={onConfirm}
+            disabled={deleting}
+          >
+            {deleting ? "מוחק..." : "מחיקה"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -219,6 +305,15 @@ export default function PatientCardPage() {
   const [chargeAmount, setChargeAmount] = useState("");
   const [savingCharge, setSavingCharge] = useState(false);
   const [chargeError, setChargeError] = useState("");
+  // Optional percent helper — e.g. 12% of an insurance payment she received.
+  const [chargeByPercent, setChargeByPercent] = useState(false);
+  const [chargeBase, setChargeBase] = useState("");
+  const [chargePercent, setChargePercent] = useState("12");
+
+  // Row pending deletion (drives the confirmation dialog).
+  const [taskToDelete, setTaskToDelete] = useState(null);
+  const [deletingTask, setDeletingTask] = useState(false);
+  const [deleteTaskError, setDeleteTaskError] = useState("");
 
   // Upload form state
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -602,6 +697,9 @@ export default function PatientCardPage() {
     setChargeLabel("");
     setChargeAmount("");
     setChargeError("");
+    setChargeByPercent(false);
+    setChargeBase("");
+    setChargePercent("12");
     setChargeFormOpen(true);
   }
 
@@ -612,9 +710,15 @@ export default function PatientCardPage() {
 
   // Saved as a regular task so it joins the open balance, the payment
   // allocation and the payments sheet exactly like any other charge.
+  const percentAmount = useMemo(() => {
+    const base = Number(chargeBase) || 0;
+    const pct = Number(chargePercent) || 0;
+    return Math.round(base * pct) / 100;
+  }, [chargeBase, chargePercent]);
+
   async function saveCharge(e) {
     e.preventDefault();
-    const amount = Number(chargeAmount);
+    const amount = chargeByPercent ? percentAmount : Number(chargeAmount);
     if (!chargeLabel.trim()) {
       setChargeError("יש לכתוב עבור מה החיוב.");
       return;
@@ -643,6 +747,40 @@ export default function PatientCardPage() {
       return;
     }
     closeChargeForm();
+    loadAll();
+  }
+
+  function askDeleteTask(task) {
+    setDeleteTaskError("");
+    setTaskToDelete(task);
+  }
+
+  function cancelDeleteTask() {
+    setTaskToDelete(null);
+    setDeleteTaskError("");
+  }
+
+  async function confirmDeleteTask() {
+    if (!taskToDelete) return;
+    setDeletingTask(true);
+    setDeleteTaskError("");
+    // .select() returns the deleted rows, so a delete that silently
+    // matched nothing (e.g. blocked by permissions) is reported, not hidden.
+    const { data, error: delErr } = await supabase
+      .from("tasks")
+      .delete()
+      .eq("id", taskToDelete.id)
+      .select("id");
+    setDeletingTask(false);
+    if (delErr || !data || data.length === 0) {
+      setDeleteTaskError(
+        delErr
+          ? describeError(delErr, "המחיקה נכשלה")
+          : "המחיקה נכשלה — השורה לא נמחקה. נסי לרענן את הדף.",
+      );
+      return;
+    }
+    setTaskToDelete(null);
     loadAll();
   }
 
@@ -1222,18 +1360,65 @@ export default function PatientCardPage() {
                   autoFocus
                 />
               </div>
-              <div>
-                <label className="label">סכום (₪)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  className="input"
-                  value={chargeAmount}
-                  onChange={(e) => setChargeAmount(e.target.value)}
-                />
-              </div>
+              {!chargeByPercent && (
+                <div>
+                  <label className="label">סכום (₪)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    className="input"
+                    value={chargeAmount}
+                    onChange={(e) => setChargeAmount(e.target.value)}
+                  />
+                </div>
+              )}
             </div>
+            <label className="flex items-center gap-2 text-sm text-ink-900 cursor-pointer w-fit">
+              <input
+                type="checkbox"
+                className="w-4 h-4 accent-accent-600"
+                checked={chargeByPercent}
+                onChange={(e) => {
+                  setChargeByPercent(e.target.checked);
+                  if (e.target.checked && !chargeLabel.trim())
+                    setChargeLabel("12% מתשלום ביטוח");
+                }}
+              />
+              לחשב לפי אחוז מסכום (למשל 12% מתשלום ביטוח)
+            </label>
+            {chargeByPercent && (
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                <div>
+                  <label className="label">הסכום שהתקבל (₪)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    className="input"
+                    value={chargeBase}
+                    onChange={(e) => setChargeBase(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="label">אחוז (%)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    className="input"
+                    value={chargePercent}
+                    onChange={(e) => setChargePercent(e.target.value)}
+                  />
+                </div>
+                <div className="md:col-span-2 text-sm pb-2">
+                  סכום החיוב:{" "}
+                  <span className="font-bold text-accent-700">
+                    {formatCurrency(percentAmount)}
+                  </span>
+                </div>
+              </div>
+            )}
             {chargeError && <p className="text-red-700 text-sm">{chargeError}</p>}
             <div className="flex gap-3">
               <button type="submit" className="btn-primary" disabled={savingCharge}>
@@ -1493,6 +1678,7 @@ export default function PatientCardPage() {
         items={unpaidTasks}
         emptyText="אין משימות לא שולמו"
         onTogglePaid={togglePaymentStatus}
+        onDelete={askDeleteTask}
         accent="open"
         getAmount={remainingAmount}
       />
@@ -1503,8 +1689,19 @@ export default function PatientCardPage() {
         items={paidTasks}
         emptyText="אין משימות ששולמו עדיין"
         onTogglePaid={togglePaymentStatus}
+        onDelete={askDeleteTask}
         accent="done"
       />
+
+      {taskToDelete && (
+        <DeleteTaskDialog
+          task={taskToDelete}
+          deleting={deletingTask}
+          error={deleteTaskError}
+          onCancel={cancelDeleteTask}
+          onConfirm={confirmDeleteTask}
+        />
+      )}
 
       <section className="card">
         <div className="px-6 py-5 border-b border-line flex items-center justify-between flex-wrap gap-3">
