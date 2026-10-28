@@ -295,6 +295,9 @@ export default function PatientCardPage() {
   // partially paying a task down when the amount doesn't cover it in full.
   const [paymentFormOpen, setPaymentFormOpen] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
+  // Optional: the specific charge this payment is for (e.g. the 12% charge).
+  // Empty = automatic, oldest debt first.
+  const [paymentTargetId, setPaymentTargetId] = useState("");
   const [recordingPayment, setRecordingPayment] = useState(false);
 
   // Manual charge state — a one-off amount added to the patient's open
@@ -676,10 +679,16 @@ export default function PatientCardPage() {
   // oldest-first, paying each task down fully until the amount runs out —
   // the last task touched absorbs whatever's left as a partial payment.
   // No-charge (₪0) tasks have nothing owed, so they're skipped automatically.
+  // When a specific charge is chosen it's paid first; anything left over
+  // still goes to the oldest remaining debt.
   const paymentAllocation = useMemo(() => {
     let budget = Number(paymentAmount) || 0;
     const allocations = [];
-    for (const t of unpaidTasksAsc) {
+    const target = unpaidTasksAsc.find((t) => t.id === paymentTargetId);
+    const order = target
+      ? [target, ...unpaidTasksAsc.filter((t) => t.id !== target.id)]
+      : unpaidTasksAsc;
+    for (const t of order) {
       if (budget <= 0.009) break;
       const before = remainingAmount(t);
       if (before <= 0.009) continue;
@@ -690,7 +699,7 @@ export default function PatientCardPage() {
     const leftover = budget > 0.009 ? budget : 0;
     const totalApplied = allocations.reduce((s, a) => s + a.apply, 0);
     return { allocations, leftover, totalApplied };
-  }, [paymentAmount, unpaidTasksAsc]);
+  }, [paymentAmount, paymentTargetId, unpaidTasksAsc]);
 
   function openChargeForm() {
     setChargeDate(new Date().toISOString().slice(0, 10));
@@ -787,6 +796,7 @@ export default function PatientCardPage() {
   function closePaymentForm() {
     setPaymentFormOpen(false);
     setPaymentAmount("");
+    setPaymentTargetId("");
   }
 
   async function recordPayment() {
@@ -1443,7 +1453,7 @@ export default function PatientCardPage() {
             <h2 className="section-title">רישום תשלום</h2>
             <p className="text-xs text-ink-500 mt-1">
               הזיני סכום שהתקבל — המערכת תוריד אותו מהחוב הפתוח, מתחילה
-              מהמשימה הוותיקה ביותר; אם הסכום לא מכסה משימה במלואה היא
+              מהמשימה הוותיקה ביותר (או מהחיוב שבחרת ב"על חשבון"); אם הסכום לא מכסה משימה במלואה היא
               תסומן "שולם חלקית" והיתרה שלה תרד בהתאם.
             </p>
           </div>
@@ -1474,6 +1484,26 @@ export default function PatientCardPage() {
                   onChange={(e) => setPaymentAmount(e.target.value)}
                   autoFocus
                 />
+              </div>
+              <div className="min-w-0 w-full md:w-auto">
+                <label className="label" htmlFor="payment-target">על חשבון</label>
+                <select
+                  id="payment-target"
+                  className="input md:min-w-[320px]"
+                  value={paymentTargetId}
+                  onChange={(e) => setPaymentTargetId(e.target.value)}
+                >
+                  <option value="">אוטומטי — מהחוב הישן ביותר</option>
+                  {unpaidTasksAsc
+                    .filter((t) => remainingAmount(t) > 0.009)
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {(t.task_definition || "משימה").slice(0, 40)}
+                        {t.date_gregorian ? ` · ${formatDate(t.date_gregorian)}` : ""}
+                        {` · נשאר ${formatCurrency(remainingAmount(t))}`}
+                      </option>
+                    ))}
+                </select>
               </div>
               {Number(paymentAmount) > 0 && (
                 <div className="text-sm">
