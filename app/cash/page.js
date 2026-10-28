@@ -6,8 +6,12 @@ import SetupNotice from "@/components/SetupNotice";
 import { DeleteIcon, EditIcon, IconButton } from "@/components/Icons";
 import { formatCurrency, formatDate } from "@/lib/format";
 
+// Amounts are stored signed: an addition (money set aside) is positive,
+// a deduction (money given out of it) is negative — so the sum is the
+// balance left. The form always takes a positive number plus a direction.
 const emptyForm = {
   date: "",
+  direction: "in",
   amount: "",
   purpose: "",
   notes: "",
@@ -78,7 +82,8 @@ export default function CashPage() {
     setEditingId(r.id);
     setForm({
       date: r.date || "",
-      amount: r.amount ?? "",
+      direction: Number(r.amount) < 0 ? "out" : "in",
+      amount: r.amount == null ? "" : Math.abs(Number(r.amount)),
       purpose: r.purpose || "",
       notes: r.notes || "",
     });
@@ -89,10 +94,15 @@ export default function CashPage() {
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
+    const abs = Math.abs(Number(form.amount));
+    if (form.amount === "" || !(abs > 0)) {
+      setError("יש להזין סכום גדול מ-0.");
+      return;
+    }
     setSaving(true);
     const payload = {
       date: form.date || null,
-      amount: form.amount === "" ? null : Number(form.amount),
+      amount: form.direction === "out" ? -abs : abs,
       purpose: form.purpose || null,
       notes: form.notes || null,
     };
@@ -123,10 +133,16 @@ export default function CashPage() {
     else load();
   }
 
-  const total = useMemo(
-    () => records.reduce((s, r) => s + (Number(r.amount) || 0), 0),
-    [records],
-  );
+  const totals = useMemo(() => {
+    let added = 0,
+      deducted = 0;
+    records.forEach((r) => {
+      const n = Number(r.amount) || 0;
+      if (n < 0) deducted -= n;
+      else added += n;
+    });
+    return { added, deducted, balance: added - deducted };
+  }, [records]);
 
   if (!supabaseReady) {
     return (
@@ -142,7 +158,10 @@ export default function CashPage() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="page-title">מעשר געלט</h1>
-          <p className="page-subtitle">רישום הוצאות והכנסות.</p>
+          <p className="page-subtitle">
+            הוספה — כסף שנכנס לקופה. הורדה — כסף שיצא ממנה. היתרה מחושבת
+            אוטומטית.
+          </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <input
@@ -152,9 +171,6 @@ export default function CashPage() {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
-          <span className="text-sm text-ink-500">
-            סה״כ: {formatCurrency(total)} ({records.length} רישומים)
-          </span>
           {!formOpen && (
             <button type="button" className="btn-primary" onClick={openAddForm}>
               + הוספת רישום
@@ -162,6 +178,25 @@ export default function CashPage() {
           )}
         </div>
       </header>
+
+      <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="stat-card">
+          <div className="stat-label">נוסף</div>
+          <div className="stat-value text-emerald-700">
+            {formatCurrency(totals.added)}
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">ירד</div>
+          <div className="stat-value text-red-700">
+            {formatCurrency(totals.deducted)}
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">יתרה ({records.length} רישומים)</div>
+          <div className="stat-value-accent">{formatCurrency(totals.balance)}</div>
+        </div>
+      </section>
 
       {formOpen && (
       <form onSubmit={handleSubmit} className="card p-6 space-y-5">
@@ -179,11 +214,31 @@ export default function CashPage() {
               onChange={(e) => update("date", e.target.value)}
             />
           </div>
+          <div className="md:col-span-4">
+            <label className="label">סוג</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className={form.direction === "in" ? "btn-primary" : "btn-ghost"}
+                onClick={() => update("direction", "in")}
+              >
+                + הוספה
+              </button>
+              <button
+                type="button"
+                className={form.direction === "out" ? "btn-primary" : "btn-ghost"}
+                onClick={() => update("direction", "out")}
+              >
+                − הורדה
+              </button>
+            </div>
+          </div>
           <div>
             <label className="label">סכום (₪)</label>
             <input
               type="number"
               step="0.01"
+              min="0"
               className="input"
               value={form.amount}
               onChange={(e) => update("amount", e.target.value)}
@@ -250,7 +305,14 @@ export default function CashPage() {
                   <td className="whitespace-nowrap">
                     {formatDate(r.date)}
                   </td>
-                  <td>{formatCurrency(r.amount)}</td>
+                  <td
+                    className={`whitespace-nowrap font-medium ${
+                      Number(r.amount) < 0 ? "text-red-700" : "text-emerald-700"
+                    }`}
+                  >
+                    {Number(r.amount) < 0 ? "− " : "+ "}
+                    {formatCurrency(Math.abs(Number(r.amount) || 0))}
+                  </td>
                   <td>{r.purpose}</td>
                   <td className="max-w-md">{r.notes}</td>
                   <td>

@@ -211,6 +211,15 @@ export default function PatientCardPage() {
   const [paymentAmount, setPaymentAmount] = useState("");
   const [recordingPayment, setRecordingPayment] = useState(false);
 
+  // Manual charge state — a one-off amount added to the patient's open
+  // balance (e.g. "פדיקור ₪350") without filling the full task form.
+  const [chargeFormOpen, setChargeFormOpen] = useState(false);
+  const [chargeDate, setChargeDate] = useState("");
+  const [chargeLabel, setChargeLabel] = useState("");
+  const [chargeAmount, setChargeAmount] = useState("");
+  const [savingCharge, setSavingCharge] = useState(false);
+  const [chargeError, setChargeError] = useState("");
+
   // Upload form state
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadDocType, setUploadDocType] = useState("");
@@ -587,6 +596,55 @@ export default function PatientCardPage() {
     const totalApplied = allocations.reduce((s, a) => s + a.apply, 0);
     return { allocations, leftover, totalApplied };
   }, [paymentAmount, unpaidTasksAsc]);
+
+  function openChargeForm() {
+    setChargeDate(new Date().toISOString().slice(0, 10));
+    setChargeLabel("");
+    setChargeAmount("");
+    setChargeError("");
+    setChargeFormOpen(true);
+  }
+
+  function closeChargeForm() {
+    setChargeFormOpen(false);
+    setChargeError("");
+  }
+
+  // Saved as a regular task so it joins the open balance, the payment
+  // allocation and the payments sheet exactly like any other charge.
+  async function saveCharge(e) {
+    e.preventDefault();
+    const amount = Number(chargeAmount);
+    if (!chargeLabel.trim()) {
+      setChargeError("יש לכתוב עבור מה החיוב.");
+      return;
+    }
+    if (!(amount > 0)) {
+      setChargeError("יש להזין סכום גדול מ-0.");
+      return;
+    }
+    setSavingCharge(true);
+    setChargeError("");
+    const { error: insErr } = await supabase.from("tasks").insert([
+      {
+        patient_id: id,
+        date_gregorian: chargeDate || null,
+        task_definition: chargeLabel.trim(),
+        hours: 0,
+        total_before_discount: amount,
+        total_after_discount: amount,
+        status: "בוצע",
+        payment_status: "לא שולם",
+      },
+    ]);
+    setSavingCharge(false);
+    if (insErr) {
+      setChargeError(describeError(insErr, "שמירת החיוב נכשלה"));
+      return;
+    }
+    closeChargeForm();
+    loadAll();
+  }
 
   function closePaymentForm() {
     setPaymentFormOpen(false);
@@ -1124,6 +1182,74 @@ export default function PatientCardPage() {
           <div className="stat-label">פתוח לתשלום</div>
           <div className="stat-value">{formatCurrency(totals.unpaid)}</div>
         </div>
+      </section>
+
+      <section className="card p-5">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="section-title">הוספת חיוב</h2>
+            <p className="text-xs text-ink-500 mt-1">
+              סכום שנוסף לחוב של המטופל (למשל פדיקור). יופיע ברשימת המשימות
+              כ"לא שולם", ואפשר לסגור אותו אחר כך דרך "רישום תשלום".
+            </p>
+          </div>
+          {!chargeFormOpen && (
+            <button type="button" className="btn-primary" onClick={openChargeForm}>
+              + הוספת חיוב
+            </button>
+          )}
+        </div>
+
+        {chargeFormOpen && (
+          <form onSubmit={saveCharge} className="space-y-4 mt-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div>
+                <label className="label">תאריך</label>
+                <input
+                  type="date"
+                  className="input"
+                  value={chargeDate}
+                  onChange={(e) => setChargeDate(e.target.value)}
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="label">עבור</label>
+                <input
+                  className="input"
+                  placeholder="למשל: פדיקור"
+                  value={chargeLabel}
+                  onChange={(e) => setChargeLabel(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="label">סכום (₪)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  className="input"
+                  value={chargeAmount}
+                  onChange={(e) => setChargeAmount(e.target.value)}
+                />
+              </div>
+            </div>
+            {chargeError && <p className="text-red-700 text-sm">{chargeError}</p>}
+            <div className="flex gap-3">
+              <button type="submit" className="btn-primary" disabled={savingCharge}>
+                {savingCharge ? "שומר..." : "שמירת החיוב"}
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={closeChargeForm}
+                disabled={savingCharge}
+              >
+                ביטול
+              </button>
+            </div>
+          </form>
+        )}
       </section>
 
       <section className="card p-5">
