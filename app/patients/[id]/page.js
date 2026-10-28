@@ -60,6 +60,8 @@ function MeetingBadge({ status }) {
   return <span className={map[status] || "badge-neutral"}>{status || "—"}</span>;
 }
 
+const PAYMENT_METHODS = ["מזומן", "העברה בנקאית", "צ׳ק", "אשראי", "ביט / פייבוקס", "ברטר", "אחר"];
+
 // How much is still owed on a task after any partial payments already
 // recorded against it (paid_amount). Never negative.
 function remainingAmount(t) {
@@ -298,6 +300,10 @@ export default function PatientCardPage() {
   // Optional: the specific charge this payment is for (e.g. the 12% charge).
   // Empty = automatic, oldest debt first.
   const [paymentTargetId, setPaymentTargetId] = useState("");
+  // How it was paid (cash, transfer, barter...) and a free-text note,
+  // e.g. "פדיקור" for a barter payment.
+  const [paymentMethod, setPaymentMethod] = useState("");
+  const [paymentNote, setPaymentNote] = useState("");
   const [recordingPayment, setRecordingPayment] = useState(false);
 
   // Manual charge state — a one-off amount added to the patient's open
@@ -797,6 +803,8 @@ export default function PatientCardPage() {
     setPaymentFormOpen(false);
     setPaymentAmount("");
     setPaymentTargetId("");
+    setPaymentMethod("");
+    setPaymentNote("");
   }
 
   async function recordPayment() {
@@ -813,7 +821,8 @@ export default function PatientCardPage() {
           : "ישולם במלואו";
       return `• ${label} — ${formatCurrency(a.apply)} (${tail})`;
     });
-    let msg = `לרשום תשלום של ${formatCurrency(totalApplied)}?\n\n${lines.join("\n")}`;
+    const how = [paymentMethod, paymentNote.trim()].filter(Boolean).join(" — ");
+    let msg = `לרשום תשלום של ${formatCurrency(totalApplied)}${how ? ` (${how})` : ""}?\n\n${lines.join("\n")}`;
     if (leftover > 0.009) {
       msg += `\n\nלתשומת לבך: ${formatCurrency(
         leftover,
@@ -847,20 +856,42 @@ export default function PatientCardPage() {
 
     // Log the payment itself as its own record — so a partial payment
     // stays visible even though the task it touched didn't move to "paid".
-    const { error: payErr } = await supabase.from("payments").insert([
-      {
-        patient_id: id,
-        amount: totalApplied,
-        paid_at: new Date().toISOString().slice(0, 10),
-        allocations: allocations.map((a) => ({
-          task_id: a.task.id,
-          task_definition: a.task.task_definition || null,
-          date_gregorian: a.task.date_gregorian || null,
-          amount: a.apply,
-          fully_paid: a.after <= 0.009,
-        })),
-      },
-    ]);
+    const paymentRow = {
+      patient_id: id,
+      amount: totalApplied,
+      paid_at: new Date().toISOString().slice(0, 10),
+      allocations: allocations.map((a) => ({
+        task_id: a.task.id,
+        task_definition: a.task.task_definition || null,
+        date_gregorian: a.task.date_gregorian || null,
+        amount: a.apply,
+        fully_paid: a.after <= 0.009,
+      })),
+    };
+    const extras = {
+      method: paymentMethod || null,
+      note: paymentNote.trim() || null,
+    };
+    let { error: payErr } = await supabase
+      .from("payments")
+      .insert([{ ...paymentRow, ...extras }]);
+    // method/note are additive (migrations/20261028_payment_method.sql) —
+    // until that migration runs, still save the payment itself without them.
+    let extrasDropped = false;
+    if (
+      payErr &&
+      (payErr.code === "PGRST204" ||
+        payErr.code === "42703" ||
+        /\b(method|note)\b/i.test(payErr.message || ""))
+    ) {
+      ({ error: payErr } = await supabase.from("payments").insert([paymentRow]));
+      extrasDropped = !payErr && Boolean(extras.method || extras.note);
+    }
+    if (extrasDropped) {
+      alert(
+        'התשלום נרשם, אבל סוג התשלום וההערה לא נשמרו — חסרות העמודות בטבלת payments. יש להריץ את מיגרציית ה-SQL (migrations/20261028_payment_method.sql) בעורך ה-SQL של Supabase.',
+      );
+    }
     if (payErr) {
       console.warn("[payments history] insert failed:", payErr);
       const missingTable = /payments/i.test(payErr.message || "") || payErr.code === "PGRST205";
@@ -1505,6 +1536,32 @@ export default function PatientCardPage() {
                     ))}
                 </select>
               </div>
+              <div>
+                <label className="label" htmlFor="payment-method">אופן תשלום</label>
+                <select
+                  id="payment-method"
+                  className="input"
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value)}
+                >
+                  <option value="">לא צוין</option>
+                  {PAYMENT_METHODS.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="min-w-0 w-full md:w-auto">
+                <label className="label" htmlFor="payment-note">הערה</label>
+                <input
+                  id="payment-note"
+                  className="input"
+                  placeholder={paymentMethod === "ברטר" ? "למשל: פדיקור" : "לא חובה"}
+                  value={paymentNote}
+                  onChange={(e) => setPaymentNote(e.target.value)}
+                />
+              </div>
               {Number(paymentAmount) > 0 && (
                 <div className="text-sm">
                   <div className="text-ink-500">
@@ -1602,8 +1659,10 @@ export default function PatientCardPage() {
             payments.map((p) => (
               <div key={p.id} className="p-4">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-sm text-ink-500 whitespace-nowrap">
-                    {formatDate(p.paid_at)}
+                  <span className="text-sm text-ink-500 flex items-center gap-2 flex-wrap min-w-0">
+                    <span className="whitespace-nowrap">{formatDate(p.paid_at)}</span>
+                    {p.method && <span className="badge-neutral">{p.method}</span>}
+                    {p.note && <span className="text-ink-700">{p.note}</span>}
                   </span>
                   <span className="font-semibold text-emerald-700 tabular-nums">
                     {formatCurrency(p.amount)}

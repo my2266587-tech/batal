@@ -130,6 +130,9 @@ create table if not exists payments (
 );
 create index if not exists payments_patient_idx on payments (patient_id);
 create index if not exists payments_paid_at_idx on payments (paid_at desc);
+-- מיגרציה: אופן תשלום (מזומן / העברה / ברטר...) והערה — ראו migrations/20261028_payment_method.sql
+alter table payments add column if not exists method text;
+alter table payments add column if not exists note text;
 
 -- =========================================
 -- קופה / רישום כספים
