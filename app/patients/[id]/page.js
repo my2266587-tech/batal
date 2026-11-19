@@ -7,7 +7,11 @@ import * as XLSX from "xlsx";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import MultiFilePicker from "@/components/MultiFilePicker";
-import PatientExpenses from "@/components/PatientExpenses";
+import PatientExpenses, {
+  EXPENSE_STYLES,
+  ExpenseLegend,
+  expenseKind,
+} from "@/components/PatientExpenses";
 import { DeleteIcon, DocumentIcon, EditIcon, IconButton } from "@/components/Icons";
 import {
   formatCurrency,
@@ -94,6 +98,7 @@ function TasksSection({
   const PAID_VALUES = ["שולם", "לא לחיוב"];
   const amountFor = getAmount || ((t) => Number(t.total_after_discount) || 0);
   const sectionTotal = items.reduce((s, t) => s + amountFor(t), 0);
+  const hasExpenses = items.some((t) => expenseKind(t));
 
   return (
     <section className="card">
@@ -108,6 +113,11 @@ function TasksSection({
             {title} ({items.length})
           </h2>
           <p className="text-xs text-ink-500 mt-1">{subtitle}</p>
+          {hasExpenses && (
+            <div className="mt-2">
+              <ExpenseLegend />
+            </div>
+          )}
         </div>
         <div className="text-left">
           <div className="text-xs text-ink-500">סה״כ</div>
@@ -145,8 +155,10 @@ function TasksSection({
             ) : (
               items.map((t) => {
                 const checked = PAID_VALUES.includes(t.payment_status);
+                const kind = expenseKind(t);
+                const style = kind ? EXPENSE_STYLES[kind] : null;
                 return (
-                  <tr key={t.id}>
+                  <tr key={t.id} className={style?.row}>
                     <td className="text-center">
                       <input
                         type="checkbox"
@@ -164,7 +176,13 @@ function TasksSection({
                         {t.task_definition || "—"}
                       </div>
                     </td>
-                    <td>{t.meeting_type || "—"}</td>
+                    <td>
+                      {style ? (
+                        <span className={style.badge}>{style.label}</span>
+                      ) : (
+                        t.meeting_type || "—"
+                      )}
+                    </td>
                     <td>{formatDecimalHoursAsHHMM(t.hours)}</td>
                     <td className="font-medium">
                       {formatCurrency(amountFor(t))}

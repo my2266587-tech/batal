@@ -14,12 +14,45 @@ import { formatCurrency, formatDate } from "@/lib/format";
 
 export const EXPENSE_TYPES = {
   travel: { label: "נסיעה", meetingType: "נסיעה" },
-  doctor: { label: "תשלום לרופא", meetingType: "הוצאה" },
+  doctor: { label: "תשלום לרופא", meetingType: "תשלום לרופא" },
   other: { label: "הוצאה אחרת", meetingType: "הוצאה" },
 };
 
-const EXPENSE_MEETING_TYPES = ["נסיעה", "הוצאה"];
+const EXPENSE_MEETING_TYPES = ["נסיעה", "תשלום לרופא", "הוצאה"];
 export const isExpenseRow = (t) => EXPENSE_MEETING_TYPES.includes(t?.meeting_type);
+
+// Which kind of expense a row is, for colouring it in the task lists:
+// "travel" | "doctor" | "other" | null (a regular task/charge).
+// Doctor payments saved before they had their own type were stored as
+// "הוצאה" with "רופא" in the text — still recognised.
+export function expenseKind(t) {
+  const type = t?.meeting_type;
+  if (type === "נסיעה") return "travel";
+  if (type === "תשלום לרופא") return "doctor";
+  if (type === "הוצאה")
+    return /רופא/.test(t?.task_definition || "") ? "doctor" : "other";
+  return null;
+}
+
+// Colours live in app/globals.css (.row-* / .badge-*).
+export const EXPENSE_STYLES = {
+  travel: { label: "נסיעה / מונית", row: "row-travel", badge: "badge-travel" },
+  doctor: { label: "תשלום לרופא", row: "row-doctor", badge: "badge-doctor" },
+  other: { label: "הוצאה אחרת", row: "row-expense", badge: "badge-expense" },
+};
+
+export function ExpenseLegend() {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs text-ink-500">
+      <span>מקרא:</span>
+      {Object.entries(EXPENSE_STYLES).map(([k, s]) => (
+        <span key={k} className={s.badge}>
+          {s.label}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 let lineSeq = 0;
 function newLine(type = "travel", description = "") {

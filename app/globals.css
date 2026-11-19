@@ -86,4 +86,19 @@ html, body {
   .badge-info { @apply badge bg-sky-50 text-sky-700; }
   .badge-neutral { @apply badge bg-slate-100 text-slate-700; }
   .badge-accent { @apply badge bg-accent-50 text-accent-700; }
+
+  /* Expense rows in the patient's task lists (components/PatientExpenses.js):
+     travel/taxi = yellow, doctor payment = blue, other expense = violet. */
+  .badge-travel  { @apply badge bg-amber-100 text-amber-800; }
+  .badge-doctor  { @apply badge bg-sky-100 text-sky-800; }
+  .badge-expense { @apply badge bg-violet-100 text-violet-800; }
+  .table-base tbody tr.row-travel { @apply bg-amber-50; }
+  .table-base tbody tr.row-travel:hover { @apply bg-amber-100/70; }
+  .table-base tbody tr.row-travel td:first-child { @apply border-r-4 border-r-amber-400; }
+  .table-base tbody tr.row-doctor { @apply bg-sky-50; }
+  .table-base tbody tr.row-doctor:hover { @apply bg-sky-100/70; }
+  .table-base tbody tr.row-doctor td:first-child { @apply border-r-4 border-r-sky-500; }
+  .table-base tbody tr.row-expense { @apply bg-violet-50; }
+  .table-base tbody tr.row-expense:hover { @apply bg-violet-100/70; }
+  .table-base tbody tr.row-expense td:first-child { @apply border-r-4 border-r-violet-400; }
 }
