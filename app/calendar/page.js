@@ -36,7 +36,7 @@ const PRIORITIES = [
 const PRIORITY_COLOR = {
   low: { bg: "#94A3B8", border: "#64748B" },
   normal: { bg: "#3F7FA3", border: "#326684" },
-  high: { bg: "#EA580C", border: "#C2410C" },
+  high: { bg: "#E96A32", border: "#C4541F" },
   urgent: { bg: "#DC2626", border: "#991B1B" },
 };
 
@@ -761,7 +761,7 @@ export default function CalendarPage() {
         }
         .calendar-host .fc-button {
           background: white;
-          border: 1px solid #e2e8f0;
+          border: 1px solid #E7EAEF;
           color: #334155;
           text-transform: none;
           padding: 0.4rem 0.8rem;
@@ -769,12 +769,12 @@ export default function CalendarPage() {
         }
         .calendar-host .fc-button:hover:not(:disabled) {
           background: #f8fafc;
-          color: #ea580c;
+          color: #E96A32;
         }
         .calendar-host .fc-button-primary:not(:disabled).fc-button-active,
         .calendar-host .fc-button-primary:not(:disabled):active {
-          background: #ea580c;
-          border-color: #ea580c;
+          background: #E96A32;
+          border-color: #E96A32;
           color: white;
         }
         .calendar-host .fc-event {
@@ -787,7 +787,7 @@ export default function CalendarPage() {
           text-decoration: line-through;
         }
         .calendar-host .fc-day-today {
-          background: #fff7ed !important;
+          background: #FDF4EF !important;
         }
         @media (max-width: 768px) {
           .calendar-host .fc-toolbar {

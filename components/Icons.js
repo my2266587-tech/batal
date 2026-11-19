@@ -30,6 +30,23 @@ export function DeleteIcon({ className = "w-4 h-4" }) {
   );
 }
 
+export function SearchIcon({ className = "w-5 h-5" }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path
+        fillRule="evenodd"
+        d="M9 3.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM2 9a7 7 0 1 1 12.45 4.39l3.33 3.33a.75.75 0 1 1-1.06 1.06l-3.33-3.33A7 7 0 0 1 2 9z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
 export function ChevronDownIcon({ className = "w-4 h-4" }) {
   return (
     <svg

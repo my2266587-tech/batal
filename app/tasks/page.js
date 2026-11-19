@@ -861,7 +861,7 @@ export default function TasksPage() {
       position: fixed;
       top: 12px;
       left: 12px;
-      background: #EA580C;
+      background: #E96A32;
       color: white;
       border: none;
       border-radius: 6px;

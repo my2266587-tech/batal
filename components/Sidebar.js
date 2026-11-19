@@ -34,8 +34,8 @@ function NavLink({ l, pathname, onNavigate, small }) {
         (active
           ? "bg-accent-600 text-white shadow-sm"
           : small
-            ? "text-white/50 hover:bg-sidebar-hover hover:text-white"
-            : "text-white/80 hover:bg-sidebar-hover hover:text-white")
+            ? "text-white/70 hover:bg-sidebar-hover hover:text-white"
+            : "text-white/90 hover:bg-sidebar-hover hover:text-white")
       }
     >
       {l.label}
@@ -64,7 +64,7 @@ function Brand() {
   return (
     <div className="px-6 py-6 border-b border-sidebar-border">
       <div className="text-2xl font-extrabold tracking-tight">בט״ל</div>
-      <div className="text-xs text-white/50 mt-1">ניהול משימות</div>
+      <div className="text-xs text-white/70 mt-1">ניהול משימות</div>
     </div>
   );
 }
@@ -94,7 +94,7 @@ function UserFooter() {
 
   if (!email) {
     return (
-      <div className="px-6 py-4 border-t border-sidebar-border text-xs text-white/40">
+      <div className="px-6 py-4 border-t border-sidebar-border text-xs text-white/60">
         © בט״ל
       </div>
     );
@@ -102,8 +102,8 @@ function UserFooter() {
 
   return (
     <div className="px-4 py-4 border-t border-sidebar-border space-y-2">
-      <div className="text-[11px] text-white/40 px-2">מחוברת כ:</div>
-      <div className="text-xs text-white/80 px-2 break-all leading-5">
+      <div className="text-xs text-white/60 px-2">מחוברת כ:</div>
+      <div className="text-xs text-white/90 px-2 break-all leading-5">
         {email}
       </div>
       <button
@@ -141,7 +141,7 @@ export default function Sidebar() {
         <div className="px-4 py-3 flex items-center justify-between">
           <div>
             <div className="text-lg font-bold">בט״ל</div>
-            <div className="text-[11px] text-white/50 -mt-0.5">ניהול משימות</div>
+            <div className="text-[11px] text-white/70 -mt-0.5">ניהול משימות</div>
           </div>
           <button
             type="button"

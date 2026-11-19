@@ -3,10 +3,12 @@
 @tailwind utilities;
 
 html, body {
-  background-color: #F6F7FB;
-  color: #0F172A;
+  background-color: #F7F8FA;
+  color: #1C2536;
   font-family: 'Heebo', system-ui, -apple-system, "Segoe UI", sans-serif;
   font-feature-settings: "ss01" on;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 * {
@@ -18,17 +20,17 @@ html, body {
     @apply inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium transition-colors;
   }
   .btn-primary {
-    @apply btn bg-accent-600 text-white hover:bg-accent-700 shadow-sm;
+    @apply btn bg-accent-600 text-white hover:bg-[#DA5D27] shadow-sm;
   }
   .btn-ghost {
-    @apply btn bg-white text-ink-800 border border-line hover:bg-surface-subtle;
+    @apply btn bg-white text-ink-800 border border-line hover:bg-surface-subtle hover:border-[#DCE0E6];
   }
   .btn-danger {
-    @apply btn bg-white text-red-700 border border-red-200 hover:bg-red-50;
+    @apply btn bg-white text-tag-danger-fg border border-[#F5CDD2] hover:bg-tag-danger-bg;
   }
   .input {
     @apply w-full rounded-lg border border-line bg-white px-3.5 py-2.5 text-base text-ink-900
-      placeholder:text-ink-400 focus:border-accent-500 focus:outline-none
+      placeholder:text-ink-400 hover:border-[#DCE0E6] focus:border-accent-400 focus:outline-none
       focus:ring-2 focus:ring-accent-100 transition-colors;
   }
   .label {
@@ -41,34 +43,37 @@ html, body {
     @apply card p-6;
   }
   .table-base {
-    @apply w-full text-right text-sm tabular-nums;
+    @apply w-full text-right text-[0.9375rem] leading-6 tabular-nums;
   }
   .table-base thead th {
-    @apply bg-surface-subtle text-ink-700 font-semibold px-4 py-3 border-b border-line whitespace-nowrap;
+    @apply bg-surface-subtle text-ink-600 text-sm font-semibold px-4 py-3 border-b border-line whitespace-nowrap;
   }
   .table-base tbody td {
-    @apply px-4 py-3.5 border-b border-line align-top;
+    @apply px-4 py-4 border-b border-line-soft align-top;
   }
   .table-base tbody tr:last-child td {
     @apply border-b-0;
   }
+  .table-base tbody tr {
+    @apply transition-colors duration-150;
+  }
   .table-base tbody tr:hover {
-    @apply bg-surface-subtle;
+    @apply bg-[#F8F9FB];
   }
   .page-title {
-    @apply text-2xl md:text-3xl font-bold text-ink-900 tracking-tight;
+    @apply text-2xl md:text-[1.75rem] md:leading-9 font-bold text-ink-900 tracking-tight;
   }
   .page-subtitle {
-    @apply text-ink-500 mt-1 text-sm md:text-base;
+    @apply text-ink-500 mt-1.5 text-sm md:text-base leading-relaxed;
   }
   .section-title {
-    @apply text-lg font-semibold text-ink-900;
+    @apply text-lg font-semibold text-ink-800 tracking-tight;
   }
   .stat-card {
     @apply card p-6;
   }
   .stat-label {
-    @apply text-sm text-ink-500;
+    @apply text-sm font-medium text-ink-500;
   }
   .stat-value {
     @apply text-3xl font-bold text-ink-900 mt-2 tracking-tight tabular-nums;
@@ -77,20 +82,20 @@ html, body {
     @apply text-3xl font-bold text-accent-600 mt-2 tracking-tight tabular-nums;
   }
   .badge {
-    @apply inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium;
+    @apply inline-flex items-center px-2.5 py-1 rounded-md text-[0.8125rem] font-medium leading-4;
   }
-  .badge-success { @apply badge bg-emerald-50 text-emerald-700; }
-  .badge-warning { @apply badge bg-amber-50 text-amber-700; }
-  .badge-danger  { @apply badge bg-red-50 text-red-700; }
-  .badge-info    { @apply badge bg-sky-50 text-sky-700; }
-  .badge-info { @apply badge bg-sky-50 text-sky-700; }
-  .badge-neutral { @apply badge bg-slate-100 text-slate-700; }
+  .badge-success { @apply badge bg-tag-success-bg text-tag-success-fg; }
+  .badge-warning { @apply badge bg-tag-warning-bg text-tag-warning-fg; }
+  /* Also used for the debt tag: very light pink with a refined red. */
+  .badge-danger  { @apply badge bg-tag-danger-bg text-tag-danger-fg; }
+  .badge-info    { @apply badge bg-tag-info-bg text-tag-info-fg; }
+  .badge-neutral { @apply badge bg-tag-neutral-bg text-tag-neutral-fg; }
   .badge-accent { @apply badge bg-accent-50 text-accent-700; }
 
   /* Big tap-friendly action buttons (patient card action bar). */
   .action-btn {
     @apply card flex items-center justify-center gap-2 min-h-[64px] px-3 py-3 text-base font-semibold text-ink-900
-      hover:border-accent-400 hover:bg-accent-50 transition-colors text-center
+      hover:border-accent-200 hover:bg-accent-50 transition-colors text-center
       disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-line;
   }
   .action-btn-active { @apply border-accent-500 bg-accent-50 ring-2 ring-accent-100; }
@@ -101,9 +106,9 @@ html, body {
   /* Choice chips (e.g. payment method) — one tap instead of a dropdown. */
   .chip {
     @apply inline-flex items-center justify-center min-h-[44px] px-4 rounded-full border border-line bg-white
-      text-base text-ink-800 hover:bg-surface-subtle transition-colors;
+      text-base text-ink-800 hover:bg-surface-subtle hover:border-[#DCE0E6] transition-colors;
   }
-  .chip-on { @apply bg-accent-600 border-accent-600 text-white hover:bg-accent-700; }
+  .chip-on { @apply bg-accent-600 border-accent-600 text-white hover:bg-[#DA5D27] hover:border-[#DA5D27]; }
   /* Collapsible card section (components/Collapsible.js). */
   .collapsible > summary { list-style: none; }
   .collapsible > summary::-webkit-details-marker { display: none; }

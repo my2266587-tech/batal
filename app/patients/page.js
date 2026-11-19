@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
-import { ChevronDownIcon, EditIcon, IconButton } from "@/components/Icons";
+import { ChevronDownIcon, EditIcon, IconButton, SearchIcon } from "@/components/Icons";
 import { useUI } from "@/components/UIProvider";
 import { remainingAmount } from "@/components/PatientTasksList";
 import { formatCurrency } from "@/lib/format";
@@ -473,14 +473,17 @@ export default function PatientsPage() {
         </form>
       )}
 
-      <input
-        type="search"
-        placeholder="🔍 חיפוש מטופל..."
-        className="input text-lg min-h-[52px]"
-        value={searchTerm}
-        onChange={(e) => setSearchTerm(e.target.value)}
-        aria-label="חיפוש מטופל"
-      />
+      <div className="relative">
+        <SearchIcon className="w-5 h-5 text-ink-400 absolute top-1/2 -translate-y-1/2 right-4 pointer-events-none" />
+        <input
+          type="search"
+          placeholder="חיפוש מטופל..."
+          className="input text-lg min-h-[52px] pr-12"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          aria-label="חיפוש מטופל"
+        />
+      </div>
 
       <div className="card divide-y divide-line overflow-hidden">
         {loading ? (
@@ -498,7 +501,7 @@ export default function PatientsPage() {
             return (
               <div
                 key={p.id}
-                className={"flex items-center gap-2 hover:bg-surface-subtle " + (inactive ? "opacity-60" : "")}
+                className={"flex items-center gap-2 hover:bg-surface-subtle " + (inactive ? "opacity-75" : "")}
               >
                 <Link
                   href={`/patients/${p.id}`}
