@@ -21,6 +21,7 @@ import {
   formatDecimalHoursAsHHMM,
 } from "@/lib/format";
 import VoiceButton from "@/components/VoiceButton";
+import { storageSafeName } from "@/lib/patientDocuments";
 import Collapsible from "@/components/Collapsible";
 import { useUI } from "@/components/UIProvider";
 import { todayLocal } from "@/components/PatientExpenses";
@@ -608,7 +609,7 @@ export default function TasksPage() {
 
   async function handleUpload(file) {
     if (!file) return null;
-    const path = `tasks/${Date.now()}_${file.name.replace(/\s+/g, "_")}`;
+    const path = `tasks/${Date.now()}_${storageSafeName(file.name)}`;
     const { data, error } = await supabase.storage
       .from("documents")
       .upload(path, file, { upsert: false });
