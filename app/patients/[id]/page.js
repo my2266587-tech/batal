@@ -7,6 +7,7 @@ import * as XLSX from "xlsx";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import MultiFilePicker from "@/components/MultiFilePicker";
+import PatientExpenses from "@/components/PatientExpenses";
 import { DeleteIcon, DocumentIcon, EditIcon, IconButton } from "@/components/Icons";
 import {
   formatCurrency,
@@ -1477,6 +1478,8 @@ export default function PatientCardPage() {
           </form>
         )}
       </section>
+
+      <PatientExpenses patientId={id} tasks={tasks} onSaved={loadAll} />
 
       <section className="card p-5">
         <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
