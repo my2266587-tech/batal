@@ -648,7 +648,7 @@ export default function CalendarPage() {
                 </select>
                 {!editingId && form.patient_id && (
                   <p className="text-[11px] text-ink-500 mt-1">
-                    בעת שמירה תיווצר אוטומטית גם שורה ב"ניהול משימות".
+                    בשמירה זה יירשם גם ב"משימות" (עם חיוב) — אין צורך לרשום שוב.
                   </p>
                 )}
               </div>

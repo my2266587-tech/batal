@@ -1372,7 +1372,7 @@ export default function PatientCardPage() {
                     : "bg-white border border-line text-ink-700 hover:bg-surface-subtle")
                 }
               >
-                קישור גורם קשר קיים
+                בחירה מהרשימה
               </button>
               <button
                 type="button"
@@ -1384,7 +1384,7 @@ export default function PatientCardPage() {
                     : "bg-white border border-line text-ink-700 hover:bg-surface-subtle")
                 }
               >
-                יצירת גורם קשר חדש
+                איש קשר חדש
               </button>
             </div>
 

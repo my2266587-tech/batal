@@ -386,6 +386,9 @@ export default function TasksPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
   const [hebrewManual, setHebrewManual] = useState(false);
+  // Old tasks that still carry travel / travel_payment keep those fields
+  // editable; new travel goes through the patient card instead.
+  const [legacyTravel, setLegacyTravel] = useState(false);
 
   // filters
   const [filterPatient, setFilterPatient] = useState("");
@@ -541,6 +544,7 @@ export default function TasksPage() {
   }
 
   function resetForm() {
+    setLegacyTravel(false);
     setForm(emptyForm);
     setEditingId(null);
   }
@@ -567,6 +571,7 @@ export default function TasksPage() {
 
   function startEdit(t) {
     setEditingId(t.id);
+    setLegacyTravel(Boolean(t.travel || Number(t.travel_payment) > 0));
     setForm({
       patient_id: t.patient_id || "",
       date_gregorian: t.date_gregorian || "",
@@ -1266,25 +1271,31 @@ export default function TasksPage() {
                   ))}
                 </select>
               </div>
-              <div>
-                <label className="label">נסיעות</label>
-                <input
-                  className="input"
-                  value={form.travel}
-                  onChange={(e) => update("travel", e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="label">תשלום נסיעה (₪)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  className="input"
-                  value={form.travel_payment}
-                  onChange={(e) => update("travel_payment", e.target.value)}
-                />
-              </div>
+              {/* Travel is recorded from the patient card ("+ נסיעה / הוצאה").
+                  These old fields only show on tasks that already have them. */}
+              {legacyTravel && (
+                <>
+                <div>
+                  <label className="label">נסיעות</label>
+                  <input
+                    className="input"
+                    value={form.travel}
+                    onChange={(e) => update("travel", e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="label">תשלום נסיעה (₪)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    className="input"
+                    value={form.travel_payment}
+                    onChange={(e) => update("travel_payment", e.target.value)}
+                  />
+                </div>
+                </>
+              )}
               <div>
                 <label className="label">סכום לפני הנחה (₪)</label>
                 <input

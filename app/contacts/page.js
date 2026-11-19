@@ -194,7 +194,7 @@ export default function ContactsPage() {
           </span>
           {!formOpen && (
             <button type="button" className="btn-primary" onClick={openAddForm}>
-              + הוספת גורם קשר
+              + איש קשר חדש
             </button>
           )}
         </div>

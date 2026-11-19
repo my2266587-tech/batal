@@ -149,7 +149,7 @@ export default function PhoneTasksPage() {
     if (effStatus(r) === "approved" || r.task_id) return;
     const patient_id = draft.patient_id || null;
     if (!patient_id) {
-      setError("יש לשייך מטופלת לפני האישור וההעברה לניהול משימות.");
+      setError("יש לבחור מטופל לפני האישור.");
       return;
     }
     setSaving(true);
@@ -400,7 +400,7 @@ export default function PhoneTasksPage() {
                   <div className="p-5 bg-surface-subtle border-t border-line space-y-4">
                     {isApproved && (
                       <div className="badge-success inline-flex">
-                        אושר והועבר לניהול משימות — לא ניתן לאשר שוב
+                        אושר והועבר למשימות
                       </div>
                     )}
 
@@ -507,7 +507,7 @@ export default function PhoneTasksPage() {
                             disabled={saving}
                             onClick={() => approveAndMove(r)}
                           >
-                            ✓ אשרי והעבירי לניהול משימות
+                            ✓ אישור והעברה למשימות
                           </button>
                         </>
                       )}
