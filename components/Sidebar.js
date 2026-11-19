@@ -5,40 +5,57 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 
+// Ordered by how often she uses them; rarely used pages sit apart at the bottom.
 const links = [
   { href: "/patients", label: "מטופלים" },
-  { href: "/tasks", label: "ניהול משימות" },
+  { href: "/tasks", label: "משימות" },
+  { href: "/calendar", label: "יומן" },
   { href: "/phone-tasks", label: "טלפונים ממתינים" },
-  { href: "/calendar", label: "לוח שנה" },
   { href: "/documents", label: "מסמכים" },
-  { href: "/contacts", label: "גורמי קשר" },
-  { href: "/summary", label: "סיכום שעות ותשלום לפי מטופל" },
+  { href: "/contacts", label: "אנשי קשר" },
+  { href: "/summary", label: "סיכום לפי מטופל" },
   { href: "/cash", label: "מעשר געלט" },
-  { href: "/import", label: "ייבוא" },
+];
+
+const moreLinks = [
+  { href: "/import", label: "ייבוא מאקסל" },
   { href: "/settings", label: "הגדרות" },
 ];
 
+function NavLink({ l, pathname, onNavigate, small }) {
+  const active = pathname === l.href || pathname.startsWith(l.href + "/");
+  return (
+    <Link
+      href={l.href}
+      onClick={onNavigate}
+      className={
+        "flex items-center rounded-lg px-4 min-h-[44px] font-medium transition-colors " +
+        (small ? "text-sm " : "text-base ") +
+        (active
+          ? "bg-accent-600 text-white shadow-sm"
+          : small
+            ? "text-white/50 hover:bg-sidebar-hover hover:text-white"
+            : "text-white/80 hover:bg-sidebar-hover hover:text-white")
+      }
+    >
+      {l.label}
+    </Link>
+  );
+}
+
 function NavList({ pathname, onNavigate }) {
   return (
-    <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-      {links.map((l) => {
-        const active = pathname === l.href || pathname.startsWith(l.href + "/");
-        return (
-          <Link
-            key={l.href}
-            href={l.href}
-            onClick={onNavigate}
-            className={
-              "block rounded-lg px-4 py-2.5 text-sm font-medium transition-colors " +
-              (active
-                ? "bg-accent-600 text-white shadow-sm"
-                : "text-white/70 hover:bg-sidebar-hover hover:text-white")
-            }
-          >
-            {l.label}
-          </Link>
-        );
-      })}
+    <nav className="flex-1 p-3 overflow-y-auto flex flex-col">
+      <div className="space-y-1">
+        {links.map((l) => (
+          <NavLink key={l.href} l={l} pathname={pathname} onNavigate={onNavigate} />
+        ))}
+      </div>
+      <div className="mt-auto pt-4 border-t border-sidebar-border space-y-1">
+        {moreLinks.map((l) => (
+          <NavLink key={l.href} l={l} pathname={pathname} onNavigate={onNavigate} small />
+        ))}
+      </div>
     </nav>
   );
 }
@@ -129,10 +146,10 @@ export default function Sidebar() {
           <button
             type="button"
             onClick={() => setMobileOpen((v) => !v)}
-            className="rounded-md px-3 py-2 text-sm bg-white/10 hover:bg-white/20"
+            className="rounded-lg px-4 min-h-[44px] text-base bg-white/10 hover:bg-white/20"
             aria-label="תפריט"
           >
-            {mobileOpen ? "סגור" : "תפריט"}
+            {mobileOpen ? "✕ סגירה" : "☰ תפריט"}
           </button>
         </div>
       </header>

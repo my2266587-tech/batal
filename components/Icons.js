@@ -84,7 +84,7 @@ export function IconButton({
       title={title}
       aria-label={title}
       className={
-        "inline-flex items-center justify-center w-8 h-8 rounded-md transition-colors " +
+        "inline-flex items-center justify-center w-11 h-11 flex-shrink-0 rounded-lg transition-colors " +
         VARIANTS[variant]
       }
       {...rest}

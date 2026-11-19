@@ -87,6 +87,28 @@ html, body {
   .badge-neutral { @apply badge bg-slate-100 text-slate-700; }
   .badge-accent { @apply badge bg-accent-50 text-accent-700; }
 
+  /* Big tap-friendly action buttons (patient card action bar). */
+  .action-btn {
+    @apply card flex items-center justify-center gap-2 min-h-[64px] px-3 py-3 text-base font-semibold text-ink-900
+      hover:border-accent-400 hover:bg-accent-50 transition-colors text-center
+      disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-line;
+  }
+  .action-btn-active { @apply border-accent-500 bg-accent-50 ring-2 ring-accent-100; }
+  .action-btn-pay {
+    @apply bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700 hover:border-emerald-700
+      disabled:hover:bg-emerald-600 disabled:hover:border-emerald-600;
+  }
+  /* Choice chips (e.g. payment method) — one tap instead of a dropdown. */
+  .chip {
+    @apply inline-flex items-center justify-center min-h-[44px] px-4 rounded-full border border-line bg-white
+      text-base text-ink-800 hover:bg-surface-subtle transition-colors;
+  }
+  .chip-on { @apply bg-accent-600 border-accent-600 text-white hover:bg-accent-700; }
+  /* Collapsible card section (components/Collapsible.js). */
+  .collapsible > summary { list-style: none; }
+  .collapsible > summary::-webkit-details-marker { display: none; }
+  .collapsible[open] > summary .collapsible-chevron { transform: rotate(180deg); }
+
   /* Expense rows in the patient's task lists (components/PatientExpenses.js):
      travel/taxi = yellow, doctor payment = blue, other expense = violet. */
   .badge-travel  { @apply badge bg-amber-100 text-amber-800; }
@@ -101,4 +123,8 @@ html, body {
   .table-base tbody tr.row-expense { @apply bg-violet-50; }
   .table-base tbody tr.row-expense:hover { @apply bg-violet-100/70; }
   .table-base tbody tr.row-expense td:first-child { @apply border-r-4 border-r-violet-400; }
+  /* Same colours for the phone-width card list. */
+  .tint-travel  { @apply bg-amber-50 border-r-4 border-r-amber-400; }
+  .tint-doctor  { @apply bg-sky-50 border-r-4 border-r-sky-500; }
+  .tint-expense { @apply bg-violet-50 border-r-4 border-r-violet-400; }
 }

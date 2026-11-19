@@ -5,6 +5,7 @@ import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import { DeleteIcon, EditIcon, IconButton } from "@/components/Icons";
 import { formatDate } from "@/lib/format";
+import { useUI } from "@/components/UIProvider";
 
 const emptyForm = {
   email: "",
@@ -14,6 +15,7 @@ const emptyForm = {
 };
 
 export default function SettingsPage() {
+  const ui = useUI();
   const [role, setRole] = useState(undefined);
   const [currentEmail, setCurrentEmail] = useState("");
   const [users, setUsers] = useState([]);
@@ -136,10 +138,10 @@ export default function SettingsPage() {
 
   async function handleDelete(u) {
     if (u.email === currentEmail) {
-      alert("אי אפשר למחוק את החשבון שלך עצמך.");
+      ui.alert("אי אפשר למחוק את החשבון שלך.");
       return;
     }
-    if (!confirm(`למחוק את המשתמש ${u.email}?`)) return;
+    if (!(await ui.confirm({ title: "למחוק את המשתמש?", message: u.email, confirmText: "מחיקה", danger: true }))) return;
     const { error } = await supabase
       .from("authorized_users")
       .delete()
@@ -150,12 +152,13 @@ export default function SettingsPage() {
 
   async function toggleActive(u) {
     if (u.email === currentEmail && u.is_active) {
-      if (
-        !confirm(
-          "השבתת החשבון שלך תוציא אותך מהמערכת מיד. להמשיך בכל זאת?",
-        )
-      )
-        return;
+      const ok = await ui.confirm({
+        title: "להשבית את החשבון שלך?",
+        message: "תצאי מהמערכת מיד.",
+        confirmText: "להשבית",
+        danger: true,
+      });
+      if (!ok) return;
     }
     const { error } = await supabase
       .from("authorized_users")
@@ -206,7 +209,6 @@ export default function SettingsPage() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="page-title">הגדרות</h1>
-          <p className="page-subtitle">ניהול משתמשים מורשים במערכת.</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <input

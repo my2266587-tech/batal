@@ -10,6 +10,7 @@ import heLocale from "@fullcalendar/core/locales/he";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import { DeleteIcon, EditIcon, IconButton } from "@/components/Icons";
+import { useUI } from "@/components/UIProvider";
 
 // Load FullCalendar only on the client to avoid SSR mismatches.
 const FullCalendar = dynamic(() => import("@fullcalendar/react"), {
@@ -72,6 +73,7 @@ const emptyForm = {
 };
 
 export default function CalendarPage() {
+  const ui = useUI();
   const calendarRef = useRef(null);
   const [patients, setPatients] = useState([]);
   const [setupChecked, setSetupChecked] = useState(false);
@@ -249,7 +251,7 @@ export default function CalendarPage() {
       .eq("id", ev.id);
     if (error) {
       console.error("[calendar] drop save failed:", error);
-      alert("שמירה נכשלה אחרי גרירה — החזרה לפוזיציה הקודמת.\n\n" + error.message);
+      ui.toast("ההזזה לא נשמרה: " + error.message, "error");
       info.revert();
     }
   }
@@ -265,7 +267,7 @@ export default function CalendarPage() {
       .eq("id", ev.id);
     if (error) {
       console.error("[calendar] resize save failed:", error);
-      alert("שינוי משך נכשל — החזרה לאורך הקודם.\n\n" + error.message);
+      ui.toast("שינוי השעה לא נשמר: " + error.message, "error");
       info.revert();
     }
   }
@@ -384,10 +386,7 @@ export default function CalendarPage() {
         if (taskErr) {
           console.error("[calendar] mirror task failed:", taskErr);
           setSaving(false);
-          alert(
-            "האירוע נשמר אך יצירת השורה ב-'ניהול משימות' נכשלה:\n\n" +
-              (taskErr.message || JSON.stringify(taskErr)),
-          );
+          ui.alert({ title: "האירוע נשמר, אבל לא נוסף לרשימת המשימות", message: taskErr.message || "" });
           closeModal();
           calendarRef.current?.getApi()?.refetchEvents();
           return;
@@ -402,7 +401,7 @@ export default function CalendarPage() {
 
   async function handleDelete() {
     if (!editingId) return;
-    if (!confirm("למחוק את האירוע?")) return;
+    if (!(await ui.confirm({ title: "למחוק את האירוע?", confirmText: "מחיקה", danger: true }))) return;
     const { error } = await supabase
       .from("calendar_events")
       .delete()
@@ -437,7 +436,7 @@ export default function CalendarPage() {
   if (!supabaseReady) {
     return (
       <div className="space-y-6">
-        <h1 className="page-title">לוח שנה</h1>
+        <h1 className="page-title">יומן</h1>
         <SetupNotice />
       </div>
     );
@@ -447,11 +446,8 @@ export default function CalendarPage() {
     <div className="space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="page-title">לוח שנה</h1>
-          <p className="page-subtitle">
-            ניהול משימות ואירועים עתידיים — לחיצה על תאריך כדי להוסיף, גרירה
-            כדי להזיז, משיכת קצה לשינוי משך.
-          </p>
+          <h1 className="page-title">יומן</h1>
+          <p className="page-subtitle">לחיצה על יום — הוספה · גרירה — הזזה</p>
         </div>
         <button
           type="button"

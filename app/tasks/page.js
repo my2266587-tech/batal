@@ -1,6 +1,7 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import {
@@ -20,6 +21,9 @@ import {
   formatDecimalHoursAsHHMM,
 } from "@/lib/format";
 import VoiceButton from "@/components/VoiceButton";
+import Collapsible from "@/components/Collapsible";
+import { useUI } from "@/components/UIProvider";
+import { todayLocal } from "@/components/PatientExpenses";
 import * as XLSX from "xlsx";
 
 const MEETING_TYPES = ["פרונטלית", "טלפונית", "וידאו", "ביקור בית", "אחר"];
@@ -366,6 +370,12 @@ function TaskDetails({ task }) {
 }
 
 export default function TasksPage() {
+  const ui = useUI();
+  const router = useRouter();
+  // Opened from a patient card ("+ פגישה / משימה"): /tasks?new=1&patient=<id>
+  // — start the form with that patient and go back to the card after saving.
+  const urlHandledRef = useRef(false);
+  const [returnTo, setReturnTo] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -413,6 +423,26 @@ export default function TasksPage() {
     setTasks(tRes.data || []);
     setPatients(pRes.data || []);
     setLoading(false);
+
+    if (!urlHandledRef.current) {
+      urlHandledRef.current = true;
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get("new") === "1") {
+        const pid = sp.get("patient") || "";
+        const known = (pRes.data || []).some((x) => x.id === pid);
+        const today = todayLocal();
+        setForm({
+          ...emptyForm,
+          patient_id: known ? pid : "",
+          date_gregorian: today,
+          date_hebrew: toHebrewDate(today),
+        });
+        setEditingId(null);
+        setHebrewManual(false);
+        setFormOpen(true);
+        if (known) setReturnTo(`/patients/${pid}`);
+      }
+    }
   }
 
   useEffect(() => {
@@ -517,12 +547,18 @@ export default function TasksPage() {
 
   function openAddForm() {
     resetForm();
+    const today = todayLocal();
+    setForm({ ...emptyForm, date_gregorian: today, date_hebrew: toHebrewDate(today) });
     setError("");
     setFormOpen(true);
     setHebrewManual(false);
   }
 
   function closeForm() {
+    if (returnTo) {
+      router.push(returnTo);
+      return;
+    }
     setFormOpen(false);
     resetForm();
     setError("");
@@ -630,39 +666,50 @@ export default function TasksPage() {
     } else {
       res = await supabase.from("tasks").insert([payload]);
     }
-    if (res.error) setError(res.error.message);
+    if (res.error) setError("השמירה נכשלה: " + res.error.message);
     setSaving(false);
     if (!res.error) {
+      ui.toast(editingId ? "המשימה עודכנה" : "המשימה נשמרה");
+      if (returnTo) {
+        router.push(returnTo);
+        return;
+      }
       closeForm();
       load();
     }
   }
 
   async function handleDelete(id) {
-    if (!confirm("למחוק את המשימה?")) return;
-    const { error } = await supabase.from("tasks").delete().eq("id", id);
-    if (error) setError(error.message);
-    else load();
+    const ok = await ui.confirm({ title: "למחוק את המשימה?", confirmText: "מחיקה", danger: true });
+    if (!ok) return;
+    const { data, error } = await supabase.from("tasks").delete().eq("id", id).select("id");
+    if (error || !data?.length) {
+      ui.toast("המחיקה נכשלה" + (error?.message ? ": " + error.message : ""), "error");
+      return;
+    }
+    ui.toast("המשימה נמחקה");
+    load();
   }
 
   async function togglePaymentStatus(task) {
     const current = task.payment_status || "לא שולם";
     const isPaid = current === "שולם" || current === "לא לחיוב";
     const newStatus = isPaid ? "לא שולם" : "שולם";
-    if (!confirm(`לשנות סטטוס תשלום מ-"${current}" ל-"${newStatus}"?`))
-      return;
+    const ok = await ui.confirm({
+      title: newStatus === "שולם" ? "לסמן כשולם?" : "לסמן כלא שולם?",
+      confirmText: newStatus === "שולם" ? "כן, שולם" : "כן, לא שולם",
+    });
+    if (!ok) return;
     const { error: updErr } = await supabase
       .from("tasks")
       .update({ payment_status: newStatus })
       .eq("id", task.id);
     if (updErr) {
-      console.error("[toggle payment]", updErr);
-      alert(
-        "עדכון סטטוס תשלום נכשל:\n\n" +
-          (updErr.message || JSON.stringify(updErr)),
-      );
+      console.error("[toggle payment]", updErr.code);
+      ui.toast("העדכון נכשל: " + (updErr.message || ""), "error");
       return;
     }
+    ui.toast(newStatus === "שולם" ? "סומן כשולם" : "סומן כלא שולם");
     load();
   }
 
@@ -695,7 +742,7 @@ export default function TasksPage() {
 
   function exportToExcel() {
     if (filtered.length === 0) {
-      alert("אין שורות לייצוא");
+      ui.alert("אין שורות לייצוא.");
       return;
     }
     const rows = buildExportRows();
@@ -712,7 +759,7 @@ export default function TasksPage() {
 
   function exportToPDF() {
     if (filtered.length === 0) {
-      alert("אין שורות לייצוא");
+      ui.alert("אין שורות לייצוא.");
       return;
     }
     const rows = buildExportRows();
@@ -842,9 +889,7 @@ export default function TasksPage() {
 
     const win = window.open("", "_blank");
     if (!win) {
-      alert(
-        "הדפדפן חסם פתיחת חלון. אפשרי חלונות קופצים לאתר זה ונסי שוב.",
-      );
+      ui.alert("הדפדפן חסם את פתיחת הדף. יש לאשר חלונות קופצים לאתר הזה ולנסות שוב.");
       return;
     }
     win.document.open();
@@ -857,6 +902,21 @@ export default function TasksPage() {
     patients.forEach((p) => (m[p.id] = p.full_name));
     return m;
   }, [patients]);
+
+  const hasExtraDetails = Boolean(
+    form.meeting_details ||
+      form.attendance ||
+      form.travel ||
+      Number(form.travel_payment) > 0 ||
+      form.call_details ||
+      form.email_details ||
+      form.other_details ||
+      form.documents_url ||
+      form.is_future ||
+      (form.priority && form.priority !== "רגילה") ||
+      (form.status && form.status !== "פתוח") ||
+      (form.payment_status && form.payment_status !== "לא שולם"),
+  );
 
   const selectedPatient = useMemo(
     () => patients.find((p) => p.id === form.patient_id) || null,
@@ -921,7 +981,7 @@ export default function TasksPage() {
   if (!supabaseReady) {
     return (
       <div className="space-y-6">
-        <h1 className="page-title">ניהול משימות</h1>
+        <h1 className="page-title">משימות</h1>
         <SetupNotice />
       </div>
     );
@@ -931,13 +991,12 @@ export default function TasksPage() {
     <div className="space-y-8">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="page-title">ניהול משימות</h1>
-          <p className="page-subtitle">ניהול פגישות ומשימות עבור כל המטופלים.</p>
+          <h1 className="page-title">משימות</h1>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <input
             type="search"
-            placeholder="חיפוש חופשי..."
+            placeholder="חיפוש..."
             className="input md:max-w-xs"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -965,8 +1024,8 @@ export default function TasksPage() {
               >
                 ⬇ PDF
               </button>
-              <button type="button" className="btn-primary" onClick={openAddForm}>
-                + הוספת משימה
+              <button type="button" className="btn-primary min-h-[44px] px-6 text-base" onClick={openAddForm}>
+                + משימה חדשה
               </button>
             </>
           )}
@@ -976,7 +1035,7 @@ export default function TasksPage() {
       {formOpen && (
       <form onSubmit={handleSubmit} className="card p-6 space-y-5">
         <h2 className="section-title">
-          {editingId ? "עריכת משימה" : "הוספת משימה"}
+          {editingId ? "עריכת משימה" : "משימה חדשה"}
         </h2>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -996,24 +1055,32 @@ export default function TasksPage() {
             </select>
           </div>
           <div>
-            <label className="label">תאריך לועזי</label>
+            <label className="label">תאריך</label>
             <input
               type="date"
               className="input"
               value={form.date_gregorian}
               onChange={(e) => update("date_gregorian", e.target.value)}
             />
+            {form.date_hebrew && (
+              <p className="text-sm text-ink-500 mt-1">{form.date_hebrew}</p>
+            )}
           </div>
           <div>
-            <label className="label">תאריך עברי</label>
-            <input
+            <label className="label">סוג פגישה</label>
+            <select
               className="input"
-              placeholder="לדוגמה: כ״ז ניסן ה׳תשפ״ה"
-              value={form.date_hebrew}
-              onChange={(e) => update("date_hebrew", e.target.value)}
-            />
+              value={form.meeting_type}
+              onChange={(e) => update("meeting_type", e.target.value)}
+            >
+              <option value="">— בחר —</option>
+              {MEETING_TYPES.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
           </div>
-
           <div>
             <label className="label">שעת התחלה</label>
             <input
@@ -1033,7 +1100,7 @@ export default function TasksPage() {
             />
           </div>
           <div>
-            <label className="label">משך שעות</label>
+            <label className="label">משך (שעות)</label>
             <input
               type="number"
               step="0.01"
@@ -1046,21 +1113,12 @@ export default function TasksPage() {
             {(() => {
               const mins = parseDurationInputToMinutes(form.hours);
               if (mins === null || mins <= 0) return null;
-              const decimalForRate = mins / 60;
               return (
                 <p className="text-xs text-ink-700 mt-1 font-medium">
-                  משך: {formatMinutesHebrew(mins)} ·{" "}
-                  <span className="text-ink-500 font-normal">
-                    ({decimalForRate.toFixed(2)} שעות לחישוב)
-                  </span>
+                  {formatMinutesHebrew(mins)}
                 </p>
               );
             })()}
-            {form.start_time && form.end_time && (
-              <p className="text-[11px] text-ink-500 mt-0.5">
-                חושב מתוך שעת התחלה וסיום; ניתן לדרוס ידנית.
-              </p>
-            )}
             {selectedPatient && (
               <p className="text-xs text-ink-500 mt-1">
                 {selectedPatient.treatment_type
@@ -1077,236 +1135,30 @@ export default function TasksPage() {
               </p>
             )}
           </div>
-          <div>
-            <label className="label">סוג פגישה</label>
-            <select
-              className="input"
-              value={form.meeting_type}
-              onChange={(e) => update("meeting_type", e.target.value)}
-            >
-              <option value="">— בחר —</option>
-              {MEETING_TYPES.map((m) => (
-                <option key={m} value={m}>
-                  {m}
+          {(selectedPatient?.extra_rates || []).length > 0 && (
+            <div>
+              <label className="label">סוג חיוב</label>
+              <select
+                className="input"
+                value={form.rate_label}
+                onChange={(e) => update("rate_label", e.target.value)}
+                disabled={!selectedPatient}
+              >
+                <option value="">
+                  {selectedPatient
+                    ? `ברירת מחדל${selectedPatient.hourly_rate != null ? ` (${formatCurrency(selectedPatient.hourly_rate)})` : ""}`
+                    : "— בחרי מטופל קודם —"}
                 </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">סוג חיוב</label>
-            <select
-              className="input"
-              value={form.rate_label}
-              onChange={(e) => update("rate_label", e.target.value)}
-              disabled={!selectedPatient}
-            >
-              <option value="">
-                {selectedPatient
-                  ? `ברירת מחדל${selectedPatient.hourly_rate != null ? ` (${formatCurrency(selectedPatient.hourly_rate)})` : ""}`
-                  : "— בחרי מטופל קודם —"}
-              </option>
-              {(selectedPatient?.extra_rates || []).map((r, i) => (
-                <option key={i} value={r.label}>
-                  {r.label} ({formatCurrency(r.rate)})
-                </option>
-              ))}
-            </select>
-            {selectedPatient &&
-              (selectedPatient.extra_rates || []).length === 0 && (
-                <p className="text-[11px] text-ink-500 mt-1">
-                  אין תעריפים נוספים — ניתן להוסיף בכרטיס המטופל.
-                </p>
-              )}
-          </div>
-          <div>
-            <label className="label">נוכחות</label>
-            <select
-              className="input"
-              value={form.attendance}
-              onChange={(e) => update("attendance", e.target.value)}
-            >
-              <option value="">— בחר —</option>
-              {ATTENDANCE.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="md:col-span-3">
-            <div className="flex items-center gap-2 mb-1">
-              <label className="label mb-0">הגדרת משימה</label>
-              <VoiceButton
-                getBaseText={() => form.task_definition}
-                onTranscript={(t) => update("task_definition", t)}
-              />
+                {(selectedPatient?.extra_rates || []).map((r, i) => (
+                  <option key={i} value={r.label}>
+                    {r.label} ({formatCurrency(r.rate)})
+                  </option>
+                ))}
+              </select>
             </div>
-            <textarea
-              className="input min-h-[120px] whitespace-pre-wrap"
-              value={form.task_definition}
-              onChange={(e) => update("task_definition", e.target.value)}
-            />
-          </div>
-
-          <div className="md:col-span-3">
-            <div className="flex items-center gap-2 mb-1">
-              <label className="label mb-0">פירוט פגישה</label>
-              <VoiceButton
-                getBaseText={() => form.meeting_details}
-                onTranscript={(t) => update("meeting_details", t)}
-              />
-            </div>
-            <textarea
-              className="input min-h-[120px] whitespace-pre-wrap"
-              value={form.meeting_details}
-              onChange={(e) => update("meeting_details", e.target.value)}
-            />
-          </div>
-
+          )}
           <div>
-            <label className="label">נסיעות</label>
-            <input
-              className="input"
-              value={form.travel}
-              onChange={(e) => update("travel", e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">תשלום נסיעה (₪)</label>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              className="input"
-              value={form.travel_payment}
-              onChange={(e) => update("travel_payment", e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">עדיפות</label>
-            <select
-              className="input"
-              value={form.priority}
-              onChange={(e) => update("priority", e.target.value)}
-            >
-              {PRIORITIES.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">סטטוס פגישה</label>
-            <select
-              className="input"
-              value={form.status}
-              onChange={(e) => update("status", e.target.value)}
-            >
-              {STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">סטטוס תשלום</label>
-            <select
-              className="input"
-              value={form.payment_status}
-              onChange={(e) => update("payment_status", e.target.value)}
-            >
-              {PAYMENT_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <label className="label mb-0">פירוט שיחה</label>
-              <VoiceButton
-                getBaseText={() => form.call_details}
-                onTranscript={(t) => update("call_details", t)}
-              />
-            </div>
-            <textarea
-              className="input min-h-[120px] whitespace-pre-wrap"
-              value={form.call_details}
-              onChange={(e) => update("call_details", e.target.value)}
-            />
-          </div>
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <label className="label mb-0">פירוט מייל</label>
-              <VoiceButton
-                getBaseText={() => form.email_details}
-                onTranscript={(t) => update("email_details", t)}
-              />
-            </div>
-            <textarea
-              className="input min-h-[120px] whitespace-pre-wrap"
-              value={form.email_details}
-              onChange={(e) => update("email_details", e.target.value)}
-            />
-          </div>
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <label className="label mb-0">פירוט אחר</label>
-              <VoiceButton
-                getBaseText={() => form.other_details}
-                onTranscript={(t) => update("other_details", t)}
-              />
-            </div>
-            <textarea
-              className="input min-h-[120px] whitespace-pre-wrap"
-              value={form.other_details}
-              onChange={(e) => update("other_details", e.target.value)}
-            />
-          </div>
-
-          <div className="md:col-span-3">
-            <label className="label">מסמכים חשובים — קישור או העלאת קובץ</label>
-            <div className="flex flex-col md:flex-row gap-3">
-              <input
-                className="input flex-1"
-                placeholder="הדבק קישור או העלה קובץ"
-                value={form.documents_url}
-                onChange={(e) => update("documents_url", e.target.value)}
-              />
-              <input
-                type="file"
-                className="text-sm"
-                onChange={async (e) => {
-                  const f = e.target.files?.[0];
-                  if (!f) return;
-                  const url = await handleUpload(f);
-                  if (url) update("documents_url", url);
-                }}
-              />
-            </div>
-            <p className="text-xs text-ink-500 mt-1">
-              להעלאת קבצים יש ליצור Bucket ציבורי בשם <b>documents</b> ב-Supabase Storage.
-            </p>
-          </div>
-
-          <div>
-            <label className="label">סה״כ לתשלום לפני הנחה (₪)</label>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              className="input"
-              value={form.total_before_discount}
-              onChange={(e) => update("total_before_discount", e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">סה״כ לתשלום אחרי הנחה (₪)</label>
+            <label className="label">סכום לתשלום (₪)</label>
             <input
               type="number"
               step="0.01"
@@ -1316,74 +1168,274 @@ export default function TasksPage() {
               onChange={(e) => update("total_after_discount", e.target.value)}
             />
           </div>
+          <div className="md:col-span-3">
+            <div className="flex items-center gap-2 mb-1">
+              <label className="label mb-0">מה נעשה?</label>
+              <VoiceButton
+                getBaseText={() => form.task_definition}
+                onTranscript={(t) => update("task_definition", t)}
+              />
+            </div>
+            <textarea
+              className="input min-h-[100px] whitespace-pre-wrap"
+              value={form.task_definition}
+              onChange={(e) => update("task_definition", e.target.value)}
+            />
+          </div>
         </div>
 
-        <div className="border-t border-line pt-5 space-y-3">
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={form.is_future}
-              onChange={(e) => update("is_future", e.target.checked)}
-            />
-            <span className="text-sm font-medium text-ink-900">
-              פגישה עתידית
-            </span>
-          </label>
-
-          {form.is_future && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pr-6">
-              <label className="flex items-center gap-2 md:col-span-1">
+        <details
+          key={editingId || "new"}
+          className="collapsible rounded-xl border border-line"
+          open={Boolean(editingId && hasExtraDetails) || undefined}
+        >
+          <summary className="flex items-center justify-between gap-3 px-4 min-h-[52px] cursor-pointer select-none text-base font-semibold text-ink-700 hover:bg-surface-subtle rounded-xl">
+            עוד פרטים (לא חובה)
+            <ChevronDownIcon className="collapsible-chevron w-5 h-5 text-ink-500 transition-transform" />
+          </summary>
+          <div className="p-4 border-t border-line space-y-5">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+              <div className="md:col-span-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <label className="label mb-0">פירוט פגישה</label>
+                  <VoiceButton
+                    getBaseText={() => form.meeting_details}
+                    onTranscript={(t) => update("meeting_details", t)}
+                  />
+                </div>
+                <textarea
+                  className="input min-h-[120px] whitespace-pre-wrap"
+                  value={form.meeting_details}
+                  onChange={(e) => update("meeting_details", e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="label">נוכחות</label>
+                <select
+                  className="input"
+                  value={form.attendance}
+                  onChange={(e) => update("attendance", e.target.value)}
+                >
+                  <option value="">— בחר —</option>
+                  {ATTENDANCE.map((a) => (
+                    <option key={a} value={a}>
+                      {a}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">סטטוס פגישה</label>
+                <select
+                  className="input"
+                  value={form.status}
+                  onChange={(e) => update("status", e.target.value)}
+                >
+                  {STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">סטטוס תשלום</label>
+                <select
+                  className="input"
+                  value={form.payment_status}
+                  onChange={(e) => update("payment_status", e.target.value)}
+                >
+                  {PAYMENT_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">עדיפות</label>
+                <select
+                  className="input"
+                  value={form.priority}
+                  onChange={(e) => update("priority", e.target.value)}
+                >
+                  {PRIORITIES.map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">נסיעות</label>
+                <input
+                  className="input"
+                  value={form.travel}
+                  onChange={(e) => update("travel", e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="label">תשלום נסיעה (₪)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  className="input"
+                  value={form.travel_payment}
+                  onChange={(e) => update("travel_payment", e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="label">סכום לפני הנחה (₪)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  className="input"
+                  value={form.total_before_discount}
+                  onChange={(e) => update("total_before_discount", e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="label">תאריך עברי (מתמלא לבד)</label>
+                <input
+                  className="input"
+                  placeholder="לדוגמה: כ״ז ניסן ה׳תשפ״ה"
+                  value={form.date_hebrew}
+                  onChange={(e) => update("date_hebrew", e.target.value)}
+                />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <label className="label mb-0">פירוט שיחה</label>
+                  <VoiceButton
+                    getBaseText={() => form.call_details}
+                    onTranscript={(t) => update("call_details", t)}
+                  />
+                </div>
+                <textarea
+                  className="input min-h-[120px] whitespace-pre-wrap"
+                  value={form.call_details}
+                  onChange={(e) => update("call_details", e.target.value)}
+                />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <label className="label mb-0">פירוט מייל</label>
+                  <VoiceButton
+                    getBaseText={() => form.email_details}
+                    onTranscript={(t) => update("email_details", t)}
+                  />
+                </div>
+                <textarea
+                  className="input min-h-[120px] whitespace-pre-wrap"
+                  value={form.email_details}
+                  onChange={(e) => update("email_details", e.target.value)}
+                />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <label className="label mb-0">פירוט אחר</label>
+                  <VoiceButton
+                    getBaseText={() => form.other_details}
+                    onTranscript={(t) => update("other_details", t)}
+                  />
+                </div>
+                <textarea
+                  className="input min-h-[120px] whitespace-pre-wrap"
+                  value={form.other_details}
+                  onChange={(e) => update("other_details", e.target.value)}
+                />
+              </div>
+              <div className="md:col-span-3">
+                <label className="label">מסמך — קישור או קובץ</label>
+                <div className="flex flex-col md:flex-row gap-3">
+                  <input
+                    className="input flex-1"
+                    placeholder="קישור (לא חובה)"
+                    value={form.documents_url}
+                    onChange={(e) => update("documents_url", e.target.value)}
+                  />
+                  <input
+                    type="file"
+                    className="text-sm"
+                    onChange={async (e) => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      const url = await handleUpload(f);
+                      if (url) update("documents_url", url);
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="border-t border-line pt-5 space-y-3">
+              <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
-                  checked={form.send_reminder}
-                  onChange={(e) =>
-                    update("send_reminder", e.target.checked)
-                  }
+                  checked={form.is_future}
+                  onChange={(e) => update("is_future", e.target.checked)}
                 />
-                <span className="text-sm text-ink-900">שלח תזכורת במייל</span>
+                <span className="text-sm font-medium text-ink-900">
+                  פגישה עתידית
+                </span>
               </label>
-              {form.send_reminder && (
-                <div className="md:col-span-2">
-                  <label className="label">מתי לשלוח</label>
-                  <select
-                    className="input"
-                    value={form.reminder_offset_minutes}
-                    onChange={(e) =>
-                      update("reminder_offset_minutes", e.target.value)
-                    }
-                  >
-                    <option value="">— בחרי —</option>
-                    {REMINDER_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-ink-500 mt-1">
-                    שליחה אמיתית עוד לא מחוברת — הערכים נשמרים בלבד.
-                  </p>
+
+              {form.is_future && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pr-6">
+                  <label className="flex items-center gap-2 md:col-span-1">
+                    <input
+                      type="checkbox"
+                      checked={form.send_reminder}
+                      onChange={(e) =>
+                        update("send_reminder", e.target.checked)
+                      }
+                    />
+                    <span className="text-sm text-ink-900">שלח תזכורת במייל</span>
+                  </label>
+                  {form.send_reminder && (
+                    <div className="md:col-span-2">
+                      <label className="label">מתי לשלוח</label>
+                      <select
+                        className="input"
+                        value={form.reminder_offset_minutes}
+                        onChange={(e) =>
+                          update("reminder_offset_minutes", e.target.value)
+                        }
+                      >
+                        <option value="">— בחרי —</option>
+                        {REMINDER_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-ink-500 mt-1">
+                        שליחה אמיתית עוד לא מחוברת — הערכים נשמרים בלבד.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-          )}
-        </div>
+          </div>
+        </details>
 
         {error && <p className="text-red-700 text-sm">{error}</p>}
 
         <div className="flex gap-3">
-          <button type="submit" className="btn-primary" disabled={saving}>
-            {saving ? "שומר..." : editingId ? "עדכן משימה" : "שמור משימה"}
+          <button type="submit" className="btn-primary min-h-[44px] px-8 text-base" disabled={saving}>
+            {saving ? "שומר..." : "שמירה"}
           </button>
-          <button type="button" className="btn-ghost" onClick={closeForm}>
+          <button type="button" className="btn-ghost min-h-[44px]" onClick={closeForm}>
             ביטול
           </button>
         </div>
       </form>
       )}
 
-      <div className="card p-5 space-y-4">
-        <h2 className="section-title">סינון</h2>
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <Collapsible title="סינון">
+        <div className="p-5 grid grid-cols-2 md:grid-cols-5 gap-4">
           <div>
             <label className="label">מטופל</label>
             <select
@@ -1448,7 +1500,7 @@ export default function TasksPage() {
             />
           </div>
         </div>
-      </div>
+      </Collapsible>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="stat-card">

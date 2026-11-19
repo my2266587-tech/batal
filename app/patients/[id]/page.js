@@ -1,18 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import * as XLSX from "xlsx";
 import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import MultiFilePicker from "@/components/MultiFilePicker";
-import PatientExpenses, {
-  EXPENSE_STYLES,
-  ExpenseLegend,
-  expenseKind,
-} from "@/components/PatientExpenses";
+import PatientExpenses, { todayLocal } from "@/components/PatientExpenses";
+import PatientTasksList, {
+  DeleteTaskDialog,
+  remainingAmount,
+} from "@/components/PatientTasksList";
+import Collapsible from "@/components/Collapsible";
+import { useUI } from "@/components/UIProvider";
 import { DeleteIcon, DocumentIcon, EditIcon, IconButton } from "@/components/Icons";
+import { buildPaymentsSheetHtml } from "@/lib/paymentsSheet";
 import {
   formatCurrency,
   formatDate,
@@ -46,35 +49,7 @@ function describeError(err, label) {
   return `${label}: ${text}`;
 }
 
-function PaymentBadge({ status }) {
-  const map = {
-    "שולם": "badge-success",
-    "שולם חלקית": "badge-warning",
-    "לא שולם": "badge-danger",
-    "לא לחיוב": "badge-neutral",
-  };
-  return <span className={map[status] || "badge-neutral"}>{status || "—"}</span>;
-}
-
-function MeetingBadge({ status }) {
-  const map = {
-    "פתוח": "badge-warning",
-    "בוצע": "badge-success",
-    "בוטל": "badge-neutral",
-  };
-  return <span className={map[status] || "badge-neutral"}>{status || "—"}</span>;
-}
-
 const PAYMENT_METHODS = ["מזומן", "העברה בנקאית", "צ׳ק", "אשראי", "ביט / פייבוקס", "ברטר", "אחר"];
-
-// How much is still owed on a task after any partial payments already
-// recorded against it (paid_amount). Never negative.
-function remainingAmount(t) {
-  const total = Number(t?.total_after_discount) || 0;
-  const paid = Number(t?.paid_amount) || 0;
-  const r = total - paid;
-  return r > 0.009 ? r : 0;
-}
 
 function Field({ label, value }) {
   return (
@@ -85,216 +60,10 @@ function Field({ label, value }) {
   );
 }
 
-function TasksSection({
-  title,
-  subtitle,
-  items,
-  emptyText,
-  onTogglePaid,
-  onDelete,
-  accent,
-  getAmount,
-}) {
-  const PAID_VALUES = ["שולם", "לא לחיוב"];
-  const amountFor = getAmount || ((t) => Number(t.total_after_discount) || 0);
-  const sectionTotal = items.reduce((s, t) => s + amountFor(t), 0);
-  const hasExpenses = items.some((t) => expenseKind(t));
-
-  return (
-    <section className="card">
-      <div
-        className={
-          "px-6 py-5 border-b border-line flex items-center justify-between " +
-          (accent === "open" ? "bg-red-50/40" : "bg-emerald-50/40")
-        }
-      >
-        <div>
-          <h2 className="section-title">
-            {title} ({items.length})
-          </h2>
-          <p className="text-xs text-ink-500 mt-1">{subtitle}</p>
-          {hasExpenses && (
-            <div className="mt-2">
-              <ExpenseLegend />
-            </div>
-          )}
-        </div>
-        <div className="text-left">
-          <div className="text-xs text-ink-500">סה״כ</div>
-          <div
-            className={
-              "text-lg font-bold tabular-nums " +
-              (accent === "open" ? "text-red-700" : "text-emerald-700")
-            }
-          >
-            {formatCurrency(sectionTotal)}
-          </div>
-        </div>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="table-base">
-          <thead>
-            <tr>
-              <th className="w-16 text-center">שולם?</th>
-              <th>תאריך</th>
-              <th>משימה</th>
-              <th>סוג</th>
-              <th>שעות</th>
-              <th>תשלום</th>
-              <th>סטטוס</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="text-center text-ink-500 py-8">
-                  {emptyText}
-                </td>
-              </tr>
-            ) : (
-              items.map((t) => {
-                const checked = PAID_VALUES.includes(t.payment_status);
-                const kind = expenseKind(t);
-                const style = kind ? EXPENSE_STYLES[kind] : null;
-                return (
-                  <tr key={t.id} className={style?.row}>
-                    <td className="text-center">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => onTogglePaid(t)}
-                        title={checked ? "סמן כלא שולם" : "סמן כשולם"}
-                        className="w-4 h-4 accent-accent-600 cursor-pointer"
-                      />
-                    </td>
-                    <td className="whitespace-nowrap">
-                      {formatDate(t.date_gregorian) || "—"}
-                    </td>
-                    <td className="max-w-xs">
-                      <div className="line-clamp-2 text-sm whitespace-pre-wrap">
-                        {t.task_definition || "—"}
-                      </div>
-                    </td>
-                    <td>
-                      {style ? (
-                        <span className={style.badge}>{style.label}</span>
-                      ) : (
-                        t.meeting_type || "—"
-                      )}
-                    </td>
-                    <td>{formatDecimalHoursAsHHMM(t.hours)}</td>
-                    <td className="font-medium">
-                      {formatCurrency(amountFor(t))}
-                      {t.payment_status === "שולם חלקית" && (
-                        <div className="text-[11px] text-ink-500 font-normal whitespace-nowrap">
-                          מתוך {formatCurrency(t.total_after_discount)} · שולם{" "}
-                          {formatCurrency(t.paid_amount)}
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      <PaymentBadge status={t.payment_status} />
-                    </td>
-                    <td>
-                      <div className="flex justify-end">
-                        <IconButton
-                          variant="delete"
-                          title="מחיקת השורה"
-                          onClick={() => onDelete(t)}
-                        >
-                          <DeleteIcon />
-                        </IconButton>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-// In-app confirmation before deleting a charge row. Focus starts on
-// "ביטול" and Esc closes, so a stray Enter never deletes anything.
-function DeleteTaskDialog({ task, deleting, error, onCancel, onConfirm }) {
-  const cancelRef = useRef(null);
-
-  useEffect(() => {
-    cancelRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    function onKey(e) {
-      if (e.key === "Escape" && !deleting) onCancel();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [deleting, onCancel]);
-
-  const paid = Number(task.paid_amount) || 0;
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onClick={() => !deleting && onCancel()}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="delete-task-title"
-        className="card w-full max-w-md p-6 space-y-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 id="delete-task-title" className="section-title">
-          למחוק את השורה?
-        </h2>
-        <div className="text-sm text-ink-900 space-y-1">
-          <div>{task.task_definition || "משימה"}</div>
-          <div className="text-ink-500">
-            {formatDate(task.date_gregorian) || "ללא תאריך"} ·{" "}
-            {formatCurrency(task.total_after_discount)}
-          </div>
-        </div>
-        {paid > 0.009 && (
-          <p className="text-sm text-amber-700">
-            על השורה הזו כבר נרשם תשלום של {formatCurrency(paid)}. אחרי המחיקה
-            הסכום הזה לא ייזקף לשום חיוב אחר (הוא יישאר רק בהיסטוריית
-            התשלומים).
-          </p>
-        )}
-        <p className="text-xs text-ink-500">אי אפשר לבטל את המחיקה.</p>
-        {error && <p className="text-red-700 text-sm">{error}</p>}
-        <div className="flex gap-3 justify-end">
-          <button
-            ref={cancelRef}
-            type="button"
-            className="btn-ghost"
-            onClick={onCancel}
-            disabled={deleting}
-          >
-            ביטול
-          </button>
-          <button
-            type="button"
-            className="btn-primary bg-red-600 hover:bg-red-700"
-            onClick={onConfirm}
-            disabled={deleting}
-          >
-            {deleting ? "מוחק..." : "מחיקה"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function PatientCardPage() {
   const params = useParams();
-  const router = useRouter();
   const id = params?.id;
+  const ui = useUI();
 
   const [patient, setPatient] = useState(null);
   const [tasks, setTasks] = useState([]);
@@ -338,6 +107,9 @@ export default function PatientCardPage() {
   const [chargeBase, setChargeBase] = useState("");
   const [chargePercent, setChargePercent] = useState("12");
 
+  // Travel / expenses form (components/PatientExpenses.js).
+  const [expenseOpen, setExpenseOpen] = useState(false);
+
   // Row pending deletion (drives the confirmation dialog).
   const [taskToDelete, setTaskToDelete] = useState(null);
   const [deletingTask, setDeletingTask] = useState(false);
@@ -370,8 +142,9 @@ export default function PatientCardPage() {
   const [savingContact, setSavingContact] = useState(false);
   const [contactError, setContactError] = useState("");
 
+  // The first load shows "טוען..."; later reloads (after saving) refresh the
+  // data in place so open sections and the scroll position stay put.
   async function loadAll() {
-    setLoading(true);
     const [pRes, tRes, dRes, pcRes, cRes, payRes] = await Promise.all([
       supabase.from("patients").select("*").eq("id", id).maybeSingle(),
       supabase
@@ -508,25 +281,36 @@ export default function PatientCardPage() {
   }
 
   async function unlinkContact(patientContactId) {
-    if (!confirm("להסיר את גורם הקשר מהמטופלת? (גורם הקשר עצמו לא יימחק)"))
-      return;
+    const ok = await ui.confirm({
+      title: "להסיר את איש הקשר מהמטופל?",
+      message: "איש הקשר עצמו יישאר ברשימת אנשי הקשר.",
+      confirmText: "הסרה",
+      danger: true,
+    });
+    if (!ok) return;
     const { error } = await supabase
       .from("patient_contacts")
       .delete()
       .eq("id", patientContactId);
-    if (error) setError(error.message);
-    else loadAll();
+    if (error) ui.toast("ההסרה נכשלה: " + error.message, "error");
+    else {
+      ui.toast("הוסר");
+      loadAll();
+    }
   }
 
   async function updateLinkNote(patientContactId, currentNote) {
-    const note = prompt("הערה למטופלת על גורם הקשר:", currentNote || "");
+    const note = await ui.prompt({ title: "הערה על איש הקשר", defaultValue: currentNote || "" });
     if (note === null) return;
     const { error } = await supabase
       .from("patient_contacts")
-      .update({ notes: note || null })
+      .update({ notes: note.trim() || null })
       .eq("id", patientContactId);
-    if (error) setError(error.message);
-    else loadAll();
+    if (error) ui.toast("השמירה נכשלה: " + error.message, "error");
+    else {
+      ui.toast("נשמר");
+      loadAll();
+    }
   }
 
   useEffect(() => {
@@ -581,7 +365,8 @@ export default function PatientCardPage() {
   }
 
   async function deleteDoc(doc) {
-    if (!confirm("למחוק את המסמך?")) return;
+    const ok = await ui.confirm({ title: "למחוק את המסמך?", confirmText: "מחיקה", danger: true });
+    if (!ok) return;
     const path = storagePathFromUrl(doc.file_url);
     if (path) {
       const { error: rmErr } = await supabase.storage
@@ -597,9 +382,10 @@ export default function PatientCardPage() {
       .delete()
       .eq("id", doc.id);
     if (error) {
-      console.error("[delete] db error:", error);
-      setError(describeError(error, "מחיקה נכשלה"));
+      console.error("[delete] db error:", error.code);
+      ui.toast(describeError(error, "המחיקה נכשלה"), "error");
     } else {
+      ui.toast("המסמך נמחק");
       loadAll();
     }
   }
@@ -727,7 +513,9 @@ export default function PatientCardPage() {
   }, [paymentAmount, paymentTargetId, unpaidTasksAsc]);
 
   function openChargeForm() {
-    setChargeDate(new Date().toISOString().slice(0, 10));
+    setPaymentFormOpen(false);
+    setExpenseOpen(false);
+    setChargeDate(todayLocal());
     setChargeLabel("");
     setChargeAmount("");
     setChargeError("");
@@ -780,6 +568,7 @@ export default function PatientCardPage() {
       setChargeError(describeError(insErr, "שמירת החיוב נכשלה"));
       return;
     }
+    ui.toast(`החיוב נשמר: ${formatCurrency(amount)}`);
     closeChargeForm();
     loadAll();
   }
@@ -818,6 +607,18 @@ export default function PatientCardPage() {
     loadAll();
   }
 
+  function openPaymentForm() {
+    setChargeFormOpen(false);
+    setExpenseOpen(false);
+    setPaymentFormOpen(true);
+  }
+
+  function openExpenseForm() {
+    setChargeFormOpen(false);
+    setPaymentFormOpen(false);
+    setExpenseOpen(true);
+  }
+
   function closePaymentForm() {
     setPaymentFormOpen(false);
     setPaymentAmount("");
@@ -826,28 +627,14 @@ export default function PatientCardPage() {
     setPaymentNote("");
   }
 
+  // The form already shows exactly what the amount will close (preview
+  // list), so saving needs no extra confirmation step.
   async function recordPayment() {
-    const { allocations, leftover, totalApplied } = paymentAllocation;
+    const { allocations, totalApplied } = paymentAllocation;
     if (allocations.length === 0) {
-      alert("אין סכום לשיוך — הזיני סכום גדול מ-0 כשקיים חוב פתוח.");
+      ui.toast("יש להזין סכום", "error");
       return;
     }
-    const lines = allocations.map((a) => {
-      const label = (a.task.task_definition || "משימה").slice(0, 50);
-      const tail =
-        a.after > 0.009
-          ? `יישאר לתשלום ${formatCurrency(a.after)}`
-          : "ישולם במלואו";
-      return `• ${label} — ${formatCurrency(a.apply)} (${tail})`;
-    });
-    const how = [paymentMethod, paymentNote.trim()].filter(Boolean).join(" — ");
-    let msg = `לרשום תשלום של ${formatCurrency(totalApplied)}${how ? ` (${how})` : ""}?\n\n${lines.join("\n")}`;
-    if (leftover > 0.009) {
-      msg += `\n\nלתשומת לבך: ${formatCurrency(
-        leftover,
-      )} מהסכום שהוזן לא שויכו — אין כרגע מספיק חוב פתוח.`;
-    }
-    if (!confirm(msg)) return;
 
     setRecordingPayment(true);
     for (const a of allocations) {
@@ -863,11 +650,13 @@ export default function PatientCardPage() {
           /paid_amount/i.test(updErr.message || "") ||
           updErr.code === "42703" ||
           updErr.code === "PGRST204";
-        alert(
-          (missingColumn
-            ? 'עדכון נכשל: בטבלת tasks חסרה העמודה paid_amount. יש להריץ קודם את מיגרציית ה-SQL (migrations/20260903_task_paid_amount.sql) בעורך ה-SQL של Supabase, ואז לנסות שוב.\n\n'
-            : "עדכון תשלום נכשל:\n\n") + (updErr.message || JSON.stringify(updErr)),
-        );
+        await ui.alert({
+          title: "התשלום לא נשמר",
+          message:
+            "נסי שוב. אם זה חוזר — צריך תמיכה טכנית.\n\n" +
+            (missingColumn ? "(migrations/20260903_task_paid_amount.sql) " : "") +
+            (updErr.message || ""),
+        });
         loadAll(); // reflect whatever already went through
         return;
       }
@@ -878,7 +667,7 @@ export default function PatientCardPage() {
     const paymentRow = {
       patient_id: id,
       amount: totalApplied,
-      paid_at: new Date().toISOString().slice(0, 10),
+      paid_at: todayLocal(),
       allocations: allocations.map((a) => ({
         task_id: a.task.id,
         task_definition: a.task.task_definition || null,
@@ -906,21 +695,20 @@ export default function PatientCardPage() {
       ({ error: payErr } = await supabase.from("payments").insert([paymentRow]));
       extrasDropped = !payErr && Boolean(extras.method || extras.note);
     }
-    if (extrasDropped) {
-      alert(
-        'התשלום נרשם, אבל סוג התשלום וההערה לא נשמרו — חסרות העמודות בטבלת payments. יש להריץ את מיגרציית ה-SQL (migrations/20261028_payment_method.sql) בעורך ה-SQL של Supabase.',
-      );
-    }
     if (payErr) {
-      console.warn("[payments history] insert failed:", payErr);
+      console.warn("[payments history] insert failed:", payErr.code);
       const missingTable = /payments/i.test(payErr.message || "") || payErr.code === "PGRST205";
-      alert(
-        `התשלום נרשם בהצלחה על המשימות (${formatCurrency(totalApplied)}), אבל שמירתו בהיסטוריית התשלומים נכשלה.\n\n` +
-          (missingTable
-            ? 'יש להריץ את מיגרציית ה-SQL (migrations/20260903_payments_history.sql) בעורך ה-SQL של Supabase, ואז התשלומים הבאים יופיעו בהיסטוריה.\n\n'
-            : "") +
-          (payErr.message || JSON.stringify(payErr)),
-      );
+      await ui.alert({
+        title: "התשלום נרשם, אבל לא נכנס לרשימת התשלומים",
+        message:
+          `החוב ירד ב-${formatCurrency(totalApplied)}. רק הרישום ב"תשלומים שהתקבלו" לא נשמר.\n\n` +
+          (missingTable ? "(migrations/20260903_payments_history.sql) " : "") +
+          (payErr.message || ""),
+      });
+    } else if (extrasDropped) {
+      ui.toast("התשלום נרשם, בלי אופן התשלום וההערה (migrations/20261028_payment_method.sql)", "error");
+    } else {
+      ui.toast(`התשלום נרשם: ${formatCurrency(totalApplied)}`);
     }
 
     setRecordingPayment(false);
@@ -959,13 +747,11 @@ export default function PatientCardPage() {
         .eq("id", task.id));
     }
     if (updErr) {
-      console.error("[toggle paid] error:", updErr);
-      alert(
-        "עדכון סטטוס תשלום נכשל:\n\n" +
-          (updErr.message || JSON.stringify(updErr)),
-      );
+      console.error("[toggle paid] error:", updErr.code);
+      ui.toast("העדכון נכשל: " + (updErr.message || ""), "error");
       return;
     }
+    ui.toast(newStatus === "שולם" ? "סומן כשולם" : "סומן כלא שולם");
     loadAll();
   }
 
@@ -981,9 +767,9 @@ export default function PatientCardPage() {
     }));
   }
 
-  function downloadPaymentsExcel() {
+  async function downloadPaymentsExcel() {
     if (exportTasks.length === 0) {
-      alert("אין תשלומים התואמים לסינון שנבחר");
+      await ui.alert("אין שורות שמתאימות לסינון שבחרת.");
       return;
     }
     const rows = buildPaymentExportRows();
@@ -1002,244 +788,22 @@ export default function PatientCardPage() {
     );
   }
 
-  function printPaymentsSheet() {
+  async function printPaymentsSheet() {
     if (exportTasks.length === 0) {
-      alert("אין תשלומים התואמים לסינון שנבחר");
+      await ui.alert("אין שורות שמתאימות לסינון שבחרת.");
       return;
     }
-    const today = formatDate(new Date());
-
-    const filterParts = [];
-    if (exportStatus === "paid") filterParts.push("רק ששולם");
-    if (exportStatus === "unpaid") filterParts.push("רק שלא שולם");
-    if (exportFrom) filterParts.push(`מתאריך ${formatDate(exportFrom)}`);
-    if (exportTo) filterParts.push(`עד תאריך ${formatDate(exportTo)}`);
-    const filterLabel = filterParts.length ? ` · מסונן: ${filterParts.join(", ")}` : "";
-
-    const escape = (s) =>
-      String(s ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
-
-    // Same four payment states shown in the app (PaymentBadge), so the
-    // printed sheet reads consistently with the on-screen table.
-    const STATUS_STYLE = {
-      "שולם": { bg: "#ECFDF5", text: "#047857", border: "#A7F3D0" },
-      "שולם חלקית": { bg: "#FFFBEB", text: "#92400E", border: "#FDE68A" },
-      "לא שולם": { bg: "#FEF2F2", text: "#B91C1C", border: "#FECACA" },
-      "לא לחיוב": { bg: "#F1F5F9", text: "#475569", border: "#E2E8F0" },
-    };
-
-    const bodyHtml = exportTasks
-      .map((t, i) => {
-        const status = t.payment_status || "לא שולם";
-        const st = STATUS_STYLE[status] || STATUS_STYLE["לא שולם"];
-        const label = t.task_definition ? escape(t.task_definition.slice(0, 90)) : "—";
-        const type = t.meeting_type ? escape(t.meeting_type) : "—";
-        const remaining = remainingAmount(t);
-        return `<tr class="${i % 2 === 1 ? "alt" : ""}">
-          <td class="nowrap">${escape(formatDate(t.date_gregorian) || "—")}</td>
-          <td>${label}</td>
-          <td class="nowrap">${type}</td>
-          <td class="nowrap num">${escape(formatDecimalHoursAsHHMM(t.hours))}</td>
-          <td class="nowrap num amount">${escape(formatCurrency(t.total_after_discount))}</td>
-          <td class="nowrap num">${remaining > 0.009 ? escape(formatCurrency(remaining)) : "—"}</td>
-          <td class="nowrap">
-            <span class="pill" style="background:${st.bg};color:${st.text};border-color:${st.border}">${escape(status)}</span>
-          </td>
-        </tr>`;
-      })
-      .join("");
-
-    const totalAmount = exportTotals.paid + exportTotals.unpaid;
-    const patientMetaParts = [];
-    if (patient.phone) patientMetaParts.push(patient.phone);
-    if (patient.treatment_type) patientMetaParts.push(patient.treatment_type);
-    const patientMeta = patientMetaParts.map(escape).join(" · ");
-
-    const html = `<!DOCTYPE html>
-<html dir="rtl" lang="he">
-<head>
-  <meta charset="utf-8" />
-  <title>דף תשלומים — ${escape(patient.full_name)}</title>
-  <style>
-    @page { size: A4 portrait; margin: 14mm 16mm; }
-    * { box-sizing: border-box; }
-    html, body {
-      font-family: "Heebo", "Arial Hebrew", Arial, sans-serif;
-      direction: rtl;
-      color: #0F172A;
-      background: #ffffff;
-    }
-    body { font-size: 10.5pt; margin: 0; padding: 28px; }
-
-    /* Brand strip */
-    .brandbar {
-      display: flex; align-items: center; justify-content: space-between;
-      padding-bottom: 14px; margin-bottom: 18px;
-      border-bottom: 2px solid #0F172A;
-    }
-    .brand { display: flex; align-items: center; gap: 8px; }
-    .brand-mark {
-      width: 26px; height: 26px; border-radius: 7px;
-      background: #EA580C; color: #fff; font-weight: 700; font-size: 12pt;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .brand-name { font-weight: 700; font-size: 11.5pt; letter-spacing: 0.2px; }
-    .brand-doc { color: #64748B; font-size: 9.5pt; }
-    .gen-date { color: #64748B; font-size: 9pt; text-align: left; }
-
-    /* Patient header */
-    .patient-block { margin-bottom: 20px; }
-    .patient-name { font-size: 19pt; font-weight: 700; margin: 0 0 4px; }
-    .patient-meta { color: #64748B; font-size: 10pt; }
-    .filter-note {
-      display: inline-block; margin-top: 8px;
-      background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 999px;
-      padding: 4px 12px; font-size: 8.8pt; color: #475569;
-    }
-
-    /* Summary cards */
-    .summary {
-      display: grid; grid-template-columns: repeat(3, 1fr);
-      gap: 12px; margin: 20px 0 24px;
-    }
-    .stat {
-      border: 1px solid #E2E8F0; border-radius: 12px; padding: 14px 16px;
-      background: #F8FAFC;
-    }
-    .stat .label {
-      font-size: 8.5pt; color: #64748B; font-weight: 600;
-      text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px;
-    }
-    .stat .value { font-size: 15pt; font-weight: 700; }
-    .stat.paid { background: #ECFDF5; border-color: #A7F3D0; }
-    .stat.paid .value { color: #047857; }
-    .stat.unpaid { background: #FEF2F2; border-color: #FECACA; }
-    .stat.unpaid .value { color: #B91C1C; }
-
-    /* Table */
-    table { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
-    thead { display: table-header-group; }
-    tr { page-break-inside: avoid; }
-    th, td { padding: 9px 10px; text-align: right; vertical-align: middle; }
-    th {
-      background: #0F172A; color: #ffffff; font-weight: 600;
-      font-size: 8.8pt; letter-spacing: 0.02em;
-    }
-    th:first-child { border-top-right-radius: 8px; }
-    th:last-child { border-top-left-radius: 8px; }
-    td { border-bottom: 1px solid #EEF2F6; }
-    tbody tr.alt td { background: #FAFBFC; }
-    .num { font-variant-numeric: tabular-nums; }
-    .amount { font-weight: 700; }
-    .nowrap { white-space: nowrap; }
-    .pill {
-      display: inline-block; padding: 3px 11px; border-radius: 999px;
-      font-size: 8.5pt; font-weight: 600; border: 1px solid transparent;
-      white-space: nowrap;
-    }
-
-    tfoot td {
-      border-top: 2px solid #0F172A; border-bottom: none;
-      padding-top: 12px; font-weight: 700; font-size: 10.5pt;
-    }
-    tfoot .label { color: #64748B; font-weight: 600; font-size: 9pt; }
-
-    .footer {
-      margin-top: 28px; padding-top: 14px; border-top: 1px solid #E2E8F0;
-      font-size: 8.3pt; color: #94A3B8; text-align: center; line-height: 1.6;
-    }
-
-    @media print {
-      body { padding: 0; }
-      .no-print { display: none; }
-    }
-    .no-print {
-      position: fixed; top: 14px; left: 14px; display: flex; gap: 8px; z-index: 10;
-    }
-    .no-print button {
-      background: #EA580C; color: #fff; border: none; border-radius: 8px;
-      padding: 9px 16px; cursor: pointer; font-family: inherit;
-      font-size: 10.5pt; font-weight: 600; box-shadow: 0 2px 8px rgba(234,88,12,0.25);
-    }
-  </style>
-</head>
-<body>
-  <div class="no-print"><button onclick="window.print()">🖨 הדפסה / שמירה כ-PDF</button></div>
-
-  <div class="brandbar">
-    <div class="brand">
-      <div class="brand-mark">ב</div>
-      <div>
-        <div class="brand-name">בט״ל</div>
-        <div class="brand-doc">דף תשלומים</div>
-      </div>
-    </div>
-    <div class="gen-date">הופק בתאריך ${today}</div>
-  </div>
-
-  <div class="patient-block">
-    <h1 class="patient-name">${escape(patient.full_name)}</h1>
-    ${patientMeta ? `<div class="patient-meta">${patientMeta}</div>` : ""}
-    <div>
-      <span class="filter-note">${exportTasks.length} פגישות${filterLabel}</span>
-    </div>
-  </div>
-
-  <div class="summary">
-    <div class="stat">
-      <div class="label">סך שעות</div>
-      <div class="value">${escape(formatDecimalHoursAsHHMM(exportTotals.hours))}</div>
-    </div>
-    <div class="stat paid">
-      <div class="label">שולם</div>
-      <div class="value">${escape(formatCurrency(exportTotals.paid))}</div>
-    </div>
-    <div class="stat unpaid">
-      <div class="label">פתוח לתשלום</div>
-      <div class="value">${escape(formatCurrency(exportTotals.unpaid))}</div>
-    </div>
-  </div>
-
-  <table>
-    <thead>
-      <tr>
-        <th>תאריך</th>
-        <th>משימה</th>
-        <th>סוג פגישה</th>
-        <th>שעות</th>
-        <th>סכום</th>
-        <th>יתרה לתשלום</th>
-        <th>סטטוס תשלום</th>
-      </tr>
-    </thead>
-    <tbody>${bodyHtml}</tbody>
-    <tfoot>
-      <tr>
-        <td colspan="3" class="label">סה״כ</td>
-        <td class="num">${escape(formatDecimalHoursAsHHMM(exportTotals.hours))}</td>
-        <td class="num amount">${escape(formatCurrency(totalAmount))}</td>
-        <td class="num amount">${escape(formatCurrency(exportTotals.unpaid))}</td>
-        <td></td>
-      </tr>
-    </tfoot>
-  </table>
-
-  <div class="footer">
-    מסמך זה הופק אוטומטית ממערכת בט״ל לניהול משימות ואינו מהווה חשבונית מס.<br />
-    בט״ל — מערכת ניהול משימות
-  </div>
-
-  <script>setTimeout(() => window.print(), 300);</script>
-</body>
-</html>`;
-
+    const html = buildPaymentsSheetHtml({
+      patient,
+      exportTasks,
+      exportStatus,
+      exportFrom,
+      exportTo,
+      exportTotals,
+    });
     const win = window.open("", "_blank");
     if (!win) {
-      alert("הדפדפן חסם פתיחת חלון. אפשרי חלונות קופצים לאתר זה ונסי שוב.");
+      await ui.alert("הדפדפן חסם את פתיחת הדף. יש לאשר חלונות קופצים לאתר הזה ולנסות שוב.");
       return;
     }
     win.document.open();
@@ -1273,146 +837,118 @@ export default function PatientCardPage() {
     );
   }
 
+  const hasDebt = totals.unpaid > 0.009;
+  const hasDetails =
+    patient.email ||
+    patient.hourly_rate != null ||
+    patient.hourly_rate_discounted != null ||
+    (Array.isArray(patient.extra_rates) && patient.extra_rates.length > 0);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="flex items-center justify-between">
         <Link
           href="/patients"
-          className="text-sm text-accent-700 hover:underline"
+          className="inline-flex items-center min-h-[44px] text-base text-accent-700 hover:underline"
         >
-          ← חזרה לרשימת מטופלים
+          → כל המטופלים
         </Link>
         <Link
           href={`/patients?edit=${patient.id}`}
-          className="inline-flex items-center gap-2 text-sm text-ink-700 hover:text-accent-700 hover:bg-accent-50 px-3 py-1.5 rounded-md transition-colors"
+          className="inline-flex items-center gap-2 min-h-[44px] text-base text-ink-700 hover:text-accent-700 hover:bg-accent-50 px-3 rounded-lg transition-colors"
         >
           <EditIcon />
-          עריכה
+          עריכת פרטים
         </Link>
       </div>
 
-      <header className="card p-6 space-y-4">
+      <header className="card p-5 md:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold text-ink-900">
-              {patient.full_name}
-            </h1>
-            {patient.treatment_type && (
-              <p className="text-sm text-ink-500 mt-1">
-                {patient.treatment_type}
-              </p>
-            )}
-          </div>
-          <span
-            className={
-              (patient.status || "פעיל") === "פעיל"
-                ? "badge-success"
-                : "badge-neutral"
-            }
-          >
-            {patient.status || "פעיל"}
-          </span>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2 border-t border-line">
-          <Field label="טלפון" value={patient.phone} />
-          <Field label="אימייל" value={patient.email} />
-          <Field
-            label="מחיר לשעה"
-            value={
-              patient.hourly_rate != null
-                ? formatCurrency(patient.hourly_rate)
-                : null
-            }
-          />
-          <Field
-            label="מחיר לשעה אחרי הנחה"
-            value={
-              patient.hourly_rate_discounted != null
-                ? formatCurrency(patient.hourly_rate_discounted)
-                : null
-            }
-          />
-          {Array.isArray(patient.extra_rates) &&
-            patient.extra_rates.length > 0 && (
-              <div className="md:col-span-4">
-                <div className="text-xs text-ink-500 mb-1.5">
-                  תעריפים נוספים
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {patient.extra_rates.map((r, i) => (
-                    <span
-                      key={i}
-                      className="inline-flex items-center gap-2 bg-surface-subtle border border-line rounded-md px-3 py-1.5 text-sm"
-                    >
-                      <span className="font-medium text-ink-900">{r.label}</span>
-                      <span className="text-ink-500">·</span>
-                      <span className="font-semibold text-accent-700">
-                        {formatCurrency(r.rate)}
-                      </span>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          {patient.notes && (
-            <div className="md:col-span-4">
-              <Field label="הערות" value={patient.notes} />
+          <div className="min-w-0">
+            <h1 className="text-2xl md:text-3xl font-bold text-ink-900">{patient.full_name}</h1>
+            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-base text-ink-500">
+              {patient.treatment_type && <span>{patient.treatment_type}</span>}
+              {patient.phone && (
+                <a href={`tel:${patient.phone}`} className="text-accent-700 hover:underline" dir="ltr">
+                  {patient.phone}
+                </a>
+              )}
             </div>
+          </div>
+          {(patient.status || "פעיל") !== "פעיל" && (
+            <span className="badge-neutral">{patient.status}</span>
           )}
         </div>
+        {patient.notes && (
+          <p className="mt-3 text-base text-ink-700 whitespace-pre-wrap bg-surface-subtle rounded-lg p-3">
+            {patient.notes}
+          </p>
+        )}
       </header>
 
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="stat-card">
-          <div className="stat-label">סך שעות</div>
-          <div className="stat-value">{formatDecimalHoursAsHHMM(totals.hours)}</div>
+      <section className="grid grid-cols-2 gap-3 md:gap-4">
+        <div className={"card p-4 md:p-5 " + (hasDebt ? "border-red-200 bg-red-50" : "")}>
+          <div className="text-base font-medium text-ink-700">פתוח לתשלום</div>
+          <div
+            className={
+              "text-2xl md:text-4xl font-bold mt-1 tabular-nums " +
+              (hasDebt ? "text-red-700" : "text-ink-900")
+            }
+          >
+            {formatCurrency(totals.unpaid)}
+          </div>
         </div>
-        <div className="stat-card">
-          <div className="stat-label">סך פגישות</div>
-          <div className="stat-value">{tasks.length}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">שולם</div>
-          <div className="stat-value-accent">{formatCurrency(totals.paid)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">פתוח לתשלום</div>
-          <div className="stat-value">{formatCurrency(totals.unpaid)}</div>
+        <div className="card p-4 md:p-5">
+          <div className="text-base font-medium text-ink-700">שולם</div>
+          <div className="text-2xl md:text-4xl font-bold mt-1 tabular-nums text-emerald-700">
+            {formatCurrency(totals.paid)}
+          </div>
+          <div className="text-sm text-ink-500 mt-1">
+            {formatDecimalHoursAsHHMM(totals.hours)} שעות
+          </div>
         </div>
       </section>
 
-      <section className="card p-5">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <h2 className="section-title">הוספת חיוב</h2>
-            <p className="text-xs text-ink-500 mt-1">
-              סכום שנוסף לחוב של המטופל (למשל פדיקור). יופיע ברשימת המשימות
-              כ"לא שולם", ואפשר לסגור אותו אחר כך דרך "רישום תשלום".
-            </p>
-          </div>
-          {!chargeFormOpen && (
-            <button type="button" className="btn-primary" onClick={openChargeForm}>
-              + הוספת חיוב
-            </button>
-          )}
-        </div>
+      <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Link href={`/tasks?new=1&patient=${patient.id}`} className="action-btn">
+          + פגישה / משימה
+        </Link>
+        <button
+          type="button"
+          className={"action-btn" + (chargeFormOpen ? " action-btn-active" : "")}
+          onClick={openChargeForm}
+        >
+          + חיוב
+        </button>
+        <button
+          type="button"
+          className={"action-btn" + (expenseOpen ? " action-btn-active" : "")}
+          onClick={openExpenseForm}
+        >
+          + נסיעה / הוצאה
+        </button>
+        <button
+          type="button"
+          className={"action-btn action-btn-pay" + (paymentFormOpen ? " action-btn-active" : "")}
+          onClick={openPaymentForm}
+          disabled={!hasDebt}
+          title={hasDebt ? undefined : "אין חוב פתוח"}
+        >
+          ✓ קיבלתי תשלום
+        </button>
+      </section>
 
-        {chargeFormOpen && (
+      {chargeFormOpen && (
+        <section className="card p-5 border-accent-200">
+          <h2 className="text-xl font-bold text-ink-900">חיוב חדש</h2>
           <form onSubmit={saveCharge} className="space-y-4 mt-4">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div>
-                <label className="label">תאריך</label>
-                <input
-                  type="date"
-                  className="input"
-                  value={chargeDate}
-                  onChange={(e) => setChargeDate(e.target.value)}
-                />
-              </div>
               <div className="md:col-span-2">
-                <label className="label">עבור</label>
+                <label className="label" htmlFor="charge-label">
+                  על מה?
+                </label>
                 <input
+                  id="charge-label"
                   className="input"
                   placeholder="למשל: פדיקור"
                   value={chargeLabel}
@@ -1422,9 +958,13 @@ export default function PatientCardPage() {
               </div>
               {!chargeByPercent && (
                 <div>
-                  <label className="label">סכום (₪)</label>
+                  <label className="label" htmlFor="charge-amount">
+                    סכום (₪)
+                  </label>
                   <input
+                    id="charge-amount"
                     type="number"
+                    inputMode="decimal"
                     step="0.01"
                     min="0"
                     className="input"
@@ -1433,26 +973,41 @@ export default function PatientCardPage() {
                   />
                 </div>
               )}
+              <div>
+                <label className="label" htmlFor="charge-date">
+                  תאריך
+                </label>
+                <input
+                  id="charge-date"
+                  type="date"
+                  className="input"
+                  value={chargeDate}
+                  onChange={(e) => setChargeDate(e.target.value)}
+                />
+              </div>
             </div>
-            <label className="flex items-center gap-2 text-sm text-ink-900 cursor-pointer w-fit">
+            <label className="flex items-center gap-2 text-base text-ink-900 cursor-pointer w-fit min-h-[44px]">
               <input
                 type="checkbox"
-                className="w-4 h-4 accent-accent-600"
+                className="w-5 h-5 accent-accent-600"
                 checked={chargeByPercent}
                 onChange={(e) => {
                   setChargeByPercent(e.target.checked);
-                  if (e.target.checked && !chargeLabel.trim())
-                    setChargeLabel("12% מתשלום ביטוח");
+                  if (e.target.checked && !chargeLabel.trim()) setChargeLabel("12% מתשלום ביטוח");
                 }}
               />
-              לחשב לפי אחוז מסכום (למשל 12% מתשלום ביטוח)
+              לחשב לפי אחוז (למשל 12% מביטוח)
             </label>
             {chargeByPercent && (
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 items-end">
                 <div>
-                  <label className="label">הסכום שהתקבל (₪)</label>
+                  <label className="label" htmlFor="charge-base">
+                    הסכום שהתקבל (₪)
+                  </label>
                   <input
+                    id="charge-base"
                     type="number"
+                    inputMode="decimal"
                     step="0.01"
                     min="0"
                     className="input"
@@ -1461,9 +1016,13 @@ export default function PatientCardPage() {
                   />
                 </div>
                 <div>
-                  <label className="label">אחוז (%)</label>
+                  <label className="label" htmlFor="charge-percent">
+                    אחוז (%)
+                  </label>
                   <input
+                    id="charge-percent"
                     type="number"
+                    inputMode="decimal"
                     step="0.01"
                     min="0"
                     className="input"
@@ -1471,22 +1030,19 @@ export default function PatientCardPage() {
                     onChange={(e) => setChargePercent(e.target.value)}
                   />
                 </div>
-                <div className="md:col-span-2 text-sm pb-2">
-                  סכום החיוב:{" "}
-                  <span className="font-bold text-accent-700">
-                    {formatCurrency(percentAmount)}
-                  </span>
+                <div className="col-span-2 text-base pb-2">
+                  חיוב: <span className="font-bold text-accent-700">{formatCurrency(percentAmount)}</span>
                 </div>
               </div>
             )}
             {chargeError && <p className="text-red-700 text-sm">{chargeError}</p>}
             <div className="flex gap-3">
-              <button type="submit" className="btn-primary" disabled={savingCharge}>
-                {savingCharge ? "שומר..." : "שמירת החיוב"}
+              <button type="submit" className="btn-primary min-h-[44px] px-8" disabled={savingCharge}>
+                {savingCharge ? "שומר..." : "שמירה"}
               </button>
               <button
                 type="button"
-                className="btn-ghost"
+                className="btn-ghost min-h-[44px]"
                 onClick={closeChargeForm}
                 disabled={savingCharge}
               >
@@ -1494,188 +1050,183 @@ export default function PatientCardPage() {
               </button>
             </div>
           </form>
-        )}
-      </section>
+        </section>
+      )}
 
-      <PatientExpenses patientId={id} tasks={tasks} onSaved={loadAll} />
+      {expenseOpen && (
+        <PatientExpenses
+          patientId={id}
+          tasks={tasks}
+          onSaved={loadAll}
+          onClose={() => setExpenseOpen(false)}
+        />
+      )}
 
-      <section className="card p-5">
-        <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-          <div>
-            <h2 className="section-title">רישום תשלום</h2>
-            <p className="text-xs text-ink-500 mt-1">
-              הזיני סכום שהתקבל — המערכת תוריד אותו מהחוב הפתוח, מתחילה
-              מהמשימה הוותיקה ביותר (או מהחיוב שבחרת ב"על חשבון"); אם הסכום לא מכסה משימה במלואה היא
-              תסומן "שולם חלקית" והיתרה שלה תרד בהתאם.
-            </p>
-          </div>
-          {!paymentFormOpen && (
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={() => setPaymentFormOpen(true)}
-              disabled={unpaidTasks.length === 0}
-              title={unpaidTasks.length === 0 ? "אין משימות פתוחות לתשלום" : undefined}
-            >
-              + רישום תשלום
-            </button>
-          )}
-        </div>
-
-        {paymentFormOpen && (
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-end gap-4">
-              <div>
-                <label className="label">סכום ששולם (₪)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  className="input"
-                  value={paymentAmount}
-                  onChange={(e) => setPaymentAmount(e.target.value)}
-                  autoFocus
-                />
-              </div>
-              <div className="min-w-0 w-full md:w-auto">
-                <label className="label" htmlFor="payment-target">על חשבון</label>
-                <select
-                  id="payment-target"
-                  className="input md:min-w-[320px]"
-                  value={paymentTargetId}
-                  onChange={(e) => setPaymentTargetId(e.target.value)}
-                >
-                  <option value="">אוטומטי — מהחוב הישן ביותר</option>
-                  {unpaidTasksAsc
-                    .filter((t) => remainingAmount(t) > 0.009)
-                    .map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {(t.task_definition || "משימה").slice(0, 40)}
-                        {t.date_gregorian ? ` · ${formatDate(t.date_gregorian)}` : ""}
-                        {` · נשאר ${formatCurrency(remainingAmount(t))}`}
-                      </option>
-                    ))}
-                </select>
-              </div>
-              <div>
-                <label className="label" htmlFor="payment-method">אופן תשלום</label>
-                <select
-                  id="payment-method"
-                  className="input"
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
-                >
-                  <option value="">לא צוין</option>
-                  {PAYMENT_METHODS.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
+      {paymentFormOpen && (
+        <section className="card p-5 border-emerald-200 space-y-4">
+          <h2 className="text-xl font-bold text-ink-900">קיבלתי תשלום</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="label" htmlFor="payment-amount">
+                כמה התקבל? (₪)
+              </label>
+              <input
+                id="payment-amount"
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                min="0"
+                className="input text-xl font-semibold"
+                value={paymentAmount}
+                onChange={(e) => setPaymentAmount(e.target.value)}
+                autoFocus
+              />
+              <button
+                type="button"
+                className="text-sm text-accent-700 hover:underline mt-1 min-h-[32px]"
+                onClick={() => setPaymentAmount(String(Math.round(totals.unpaid * 100) / 100))}
+              >
+                כל החוב ({formatCurrency(totals.unpaid)})
+              </button>
+            </div>
+            <div className="md:col-span-2 min-w-0">
+              <label className="label" htmlFor="payment-target">
+                על חשבון (לא חובה)
+              </label>
+              <select
+                id="payment-target"
+                className="input"
+                value={paymentTargetId}
+                onChange={(e) => setPaymentTargetId(e.target.value)}
+              >
+                <option value="">אוטומטי — החוב הכי ישן קודם</option>
+                {unpaidTasksAsc
+                  .filter((t) => remainingAmount(t) > 0.009)
+                  .map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {(t.task_definition || "משימה").slice(0, 40)}
+                      {t.date_gregorian ? ` · ${formatDate(t.date_gregorian)}` : ""}
+                      {` · נשאר ${formatCurrency(remainingAmount(t))}`}
                     </option>
                   ))}
-                </select>
-              </div>
-              <div className="min-w-0 w-full md:w-auto">
-                <label className="label" htmlFor="payment-note">הערה</label>
-                <input
-                  id="payment-note"
-                  className="input"
-                  placeholder={paymentMethod === "ברטר" ? "למשל: פדיקור" : "לא חובה"}
-                  value={paymentNote}
-                  onChange={(e) => setPaymentNote(e.target.value)}
-                />
-              </div>
-              {Number(paymentAmount) > 0 && (
-                <div className="text-sm">
-                  <div className="text-ink-500">
-                    יוקצו {formatCurrency(paymentAllocation.totalApplied)} ל-
-                    {paymentAllocation.allocations.length} משימות
-                  </div>
-                  {paymentAllocation.leftover > 0.009 && (
-                    <div className="text-amber-700">
-                      {formatCurrency(paymentAllocation.leftover)} מהסכום לא
-                      ניתן לשיוך — אין מספיק חוב פתוח
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {paymentAllocation.allocations.length > 0 && (
-              <div className="overflow-x-auto border border-line rounded-md max-h-80 overflow-y-auto">
-                <table className="table-base">
-                  <thead>
-                    <tr>
-                      <th>תאריך</th>
-                      <th>משימה</th>
-                      <th>יתרה לפני</th>
-                      <th>מוקצה עכשיו</th>
-                      <th>יתרה אחרי</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {paymentAllocation.allocations.map(({ task: t, before, apply, after }) => (
-                      <tr key={t.id}>
-                        <td className="whitespace-nowrap">
-                          {formatDate(t.date_gregorian) || "—"}
-                        </td>
-                        <td className="max-w-xs">
-                          <div className="line-clamp-1 text-sm">
-                            {t.task_definition || "—"}
-                          </div>
-                        </td>
-                        <td>{formatCurrency(before)}</td>
-                        <td className="font-medium text-emerald-700">
-                          {formatCurrency(apply)}
-                        </td>
-                        <td>
-                          {after > 0.009 ? (
-                            formatCurrency(after)
-                          ) : (
-                            <span className="badge-success">שולם במלואו</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            <div className="flex gap-3">
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={recordPayment}
-                disabled={recordingPayment || paymentAllocation.allocations.length === 0}
-              >
-                {recordingPayment
-                  ? "רושם..."
-                  : `רישום תשלום של ${formatCurrency(paymentAllocation.totalApplied)}`}
-              </button>
-              <button
-                type="button"
-                className="btn-ghost"
-                onClick={closePaymentForm}
-                disabled={recordingPayment}
-              >
-                ביטול
-              </button>
+              </select>
             </div>
           </div>
-        )}
+
+          <div>
+            <div className="label">איך שולם?</div>
+            <div className="flex flex-wrap gap-2">
+              {PAYMENT_METHODS.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={"chip" + (paymentMethod === m ? " chip-on" : "")}
+                  aria-pressed={paymentMethod === m}
+                  onClick={() => setPaymentMethod(paymentMethod === m ? "" : m)}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="label" htmlFor="payment-note">
+              הערה (לא חובה)
+            </label>
+            <input
+              id="payment-note"
+              className="input"
+              placeholder={paymentMethod === "ברטר" ? "למשל: פדיקור" : ""}
+              value={paymentNote}
+              onChange={(e) => setPaymentNote(e.target.value)}
+            />
+          </div>
+
+          {paymentAllocation.allocations.length > 0 && (
+            <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 space-y-1">
+              <div className="text-sm font-semibold text-emerald-800">התשלום ייכנס על:</div>
+              <ul className="text-sm text-ink-900 space-y-1">
+                {paymentAllocation.allocations.map(({ task: t, apply, after }) => (
+                  <li key={t.id} className="flex flex-wrap gap-x-2">
+                    <span className="truncate max-w-[60vw] md:max-w-md">
+                      {(t.task_definition || "משימה").slice(0, 60)}
+                      {t.date_gregorian ? ` (${formatDate(t.date_gregorian)})` : ""}
+                    </span>
+                    <span className="font-semibold">{formatCurrency(apply)}</span>
+                    <span className="text-ink-500">
+                      {after > 0.009 ? `· נשאר ${formatCurrency(after)}` : "· נסגר ✓"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {paymentAllocation.leftover > 0.009 && (
+            <p className="text-sm text-amber-700">
+              {formatCurrency(paymentAllocation.leftover)} יותר מהחוב — הסכום הזה לא יירשם.
+            </p>
+          )}
+
+          <div className="flex gap-3 flex-wrap">
+            <button
+              type="button"
+              className="btn-primary min-h-[44px] px-8 bg-emerald-600 hover:bg-emerald-700"
+              onClick={recordPayment}
+              disabled={recordingPayment || paymentAllocation.allocations.length === 0}
+            >
+              {recordingPayment
+                ? "שומר..."
+                : `שמירה — ${formatCurrency(paymentAllocation.totalApplied)}`}
+            </button>
+            <button
+              type="button"
+              className="btn-ghost min-h-[44px]"
+              onClick={closePaymentForm}
+              disabled={recordingPayment}
+            >
+              ביטול
+            </button>
+          </div>
+        </section>
+      )}
+
+      <section className="card overflow-hidden">
+        <div
+          className={
+            "px-5 py-4 border-b border-line flex items-center justify-between gap-3 " +
+            (hasDebt ? "bg-red-50/60" : "bg-emerald-50/60")
+          }
+        >
+          <h2 className="text-lg font-semibold text-ink-900">
+            לא שולם <span className="text-ink-500 font-normal">({unpaidTasks.length})</span>
+          </h2>
+          <span className={"text-lg font-bold tabular-nums " + (hasDebt ? "text-red-700" : "text-emerald-700")}>
+            {formatCurrency(totals.unpaid)}
+          </span>
+        </div>
+        <PatientTasksList
+          items={unpaidTasks}
+          emptyText="אין חובות פתוחים 🎉"
+          onTogglePaid={togglePaymentStatus}
+          onDelete={askDeleteTask}
+          getAmount={remainingAmount}
+        />
       </section>
 
-      <section className="card">
-        <div className="px-6 py-5 border-b border-line">
-          <h2 className="section-title">היסטוריית תשלומים ({payments.length})</h2>
-          <p className="text-xs text-ink-500 mt-1">
-            כל תשלום שנרשמה עבורו — כולל תשלום שכיסה רק חלק ממשימה.
-          </p>
-        </div>
+      <Collapsible title="שולם" count={paidTasks.length}>
+        <PatientTasksList
+          items={paidTasks}
+          emptyText="עדיין אין שורות ששולמו"
+          onTogglePaid={togglePaymentStatus}
+          onDelete={askDeleteTask}
+        />
+      </Collapsible>
+
+      <Collapsible title="תשלומים שהתקבלו" count={payments.length}>
         <div className="divide-y divide-line">
           {payments.length === 0 ? (
-            <p className="p-6 text-sm text-ink-500 text-center">
-              עדיין לא נרשמו תשלומים דרך "רישום תשלום".
-            </p>
+            <p className="p-6 text-center text-ink-500">עדיין לא נרשמו תשלומים.</p>
           ) : (
             payments.map((p) => (
               <div key={p.id} className="p-4">
@@ -1693,13 +1244,10 @@ export default function PatientCardPage() {
                   <ul className="mt-1.5 text-xs text-ink-500 space-y-0.5">
                     {p.allocations.map((a, i) => (
                       <li key={i}>
-                        •{" "}
-                        {(a.task_definition || "משימה").slice(0, 70)}
+                        • {(a.task_definition || "משימה").slice(0, 70)}
                         {a.date_gregorian ? ` (${formatDate(a.date_gregorian)})` : ""} —{" "}
-                        <span className="font-medium text-ink-700">
-                          {formatCurrency(a.amount)}
-                        </span>{" "}
-                        {a.fully_paid ? "· שולם במלואו" : "· תשלום חלקי"}
+                        <span className="font-medium text-ink-700">{formatCurrency(a.amount)}</span>{" "}
+                        {a.fully_paid ? "· נסגר" : "· חלקי"}
                       </li>
                     ))}
                   </ul>
@@ -1708,100 +1256,86 @@ export default function PatientCardPage() {
             ))
           )}
         </div>
-      </section>
+      </Collapsible>
 
-      <section className="card p-5">
-        <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-          <h2 className="section-title">הורדת דף תשלומים</h2>
-          <span className="text-xs text-ink-500">
-            {exportTasks.length} מתוך {tasks.length} פגישות ייכללו
-          </span>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 items-end">
-          <div>
-            <label className="label">סטטוס תשלום</label>
-            <select
-              className="input"
-              value={exportStatus}
-              onChange={(e) => setExportStatus(e.target.value)}
-            >
-              <option value="all">הכל</option>
-              <option value="paid">רק ששולם</option>
-              <option value="unpaid">רק שלא שולם</option>
-            </select>
+      <Collapsible title="דף תשלומים להדפסה / שליחה">
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="label" htmlFor="export-status">
+                מה לכלול
+              </label>
+              <select
+                id="export-status"
+                className="input"
+                value={exportStatus}
+                onChange={(e) => setExportStatus(e.target.value)}
+              >
+                <option value="all">הכל</option>
+                <option value="unpaid">רק מה שלא שולם</option>
+                <option value="paid">רק מה ששולם</option>
+              </select>
+            </div>
+            <div>
+              <label className="label" htmlFor="export-from">
+                מתאריך (לא חובה)
+              </label>
+              <input
+                id="export-from"
+                type="date"
+                className="input"
+                value={exportFrom}
+                onChange={(e) => setExportFrom(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="label" htmlFor="export-to">
+                עד תאריך (לא חובה)
+              </label>
+              <input
+                id="export-to"
+                type="date"
+                className="input"
+                value={exportTo}
+                onChange={(e) => setExportTo(e.target.value)}
+              />
+            </div>
           </div>
-          <div>
-            <label className="label">מתאריך</label>
-            <input
-              type="date"
-              className="input"
-              value={exportFrom}
-              onChange={(e) => setExportFrom(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">עד תאריך</label>
-            <input
-              type="date"
-              className="input"
-              value={exportTo}
-              onChange={(e) => setExportTo(e.target.value)}
-            />
-          </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className="btn-ghost flex-1"
-              onClick={downloadPaymentsExcel}
-              title="הורדת דף תשלומים כקובץ Excel"
-            >
+          <div className="flex gap-3 flex-wrap items-center">
+            <button type="button" className="btn-primary min-h-[44px]" onClick={printPaymentsSheet}>
+              🖨 הדפסה / PDF
+            </button>
+            <button type="button" className="btn-ghost min-h-[44px]" onClick={downloadPaymentsExcel}>
               ⬇ Excel
             </button>
-            <button
-              type="button"
-              className="btn-ghost flex-1"
-              onClick={printPaymentsSheet}
-              title="הפקת דף תשלומים מסודר להדפסה / PDF"
-            >
-              ⬇ PDF
-            </button>
+            <span className="text-sm text-ink-500">{exportTasks.length} שורות</span>
           </div>
         </div>
-        {(exportStatus !== "all" || exportFrom || exportTo) && (
-          <button
-            type="button"
-            className="text-xs text-accent-700 hover:underline mt-3"
-            onClick={() => {
-              setExportStatus("all");
-              setExportFrom("");
-              setExportTo("");
-            }}
-          >
-            איפוס סינון
-          </button>
-        )}
-      </section>
+      </Collapsible>
 
-      <TasksSection
-        title="משימות לא שולמו"
-        subtitle="חוב פתוח לתשלום"
-        items={unpaidTasks}
-        emptyText="אין משימות לא שולמו"
-        onTogglePaid={togglePaymentStatus}
-        onDelete={askDeleteTask}
-        accent="open"
-        getAmount={remainingAmount}
-      />
-
-      <TasksSection
-        title="משימות ששולמו"
-        subtitle="לא נכנסות לחישוב החוב הפתוח"
-        items={paidTasks}
-        emptyText="אין משימות ששולמו עדיין"
-        onTogglePaid={togglePaymentStatus}
-        onDelete={askDeleteTask}
-        accent="done"
-      />
+      {hasDetails && (
+        <Collapsible title="פרטים ותעריפים">
+          <div className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Field label="אימייל" value={patient.email} />
+            <Field
+              label="מחיר לשעה"
+              value={patient.hourly_rate != null ? formatCurrency(patient.hourly_rate) : null}
+            />
+            <Field
+              label="אחרי הנחה"
+              value={
+                patient.hourly_rate_discounted != null
+                  ? formatCurrency(patient.hourly_rate_discounted)
+                  : null
+              }
+            />
+            {Array.isArray(patient.extra_rates) &&
+              patient.extra_rates.map((r, i) => (
+                <Field key={i} label={r.label} value={formatCurrency(r.rate)} />
+              ))}
+          </div>
+        </Collapsible>
+      )}
 
       {taskToDelete && (
         <DeleteTaskDialog
@@ -1813,19 +1347,14 @@ export default function PatientCardPage() {
         />
       )}
 
-      <section className="card">
-        <div className="px-6 py-5 border-b border-line flex items-center justify-between flex-wrap gap-3">
-          <h2 className="section-title">גורמי קשר של המטופלת</h2>
-          {!contactFormOpen && (
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={openContactForm}
-            >
-              + הוספת גורם קשר
+      <Collapsible title="אנשי קשר" count={linkedContacts.length}>
+        {!contactFormOpen && (
+          <div className="px-5 pt-4">
+            <button type="button" className="btn-ghost min-h-[44px]" onClick={openContactForm}>
+              + הוספת איש קשר
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {contactFormOpen && (
           <form
@@ -1861,7 +1390,7 @@ export default function PatientCardPage() {
 
             {contactMode === "link" ? (
               <div>
-                <label className="label">בחרי גורם קשר *</label>
+                <label className="label">בחירת איש קשר</label>
                 <select
                   className="input"
                   value={linkExistingId}
@@ -2012,8 +1541,7 @@ export default function PatientCardPage() {
         <div className="p-6">
           {linkedContacts.length === 0 ? (
             <p className="text-sm text-ink-500">
-              עדיין אין גורמי קשר מקושרים — לחצי על "+ הוספת גורם קשר" כדי
-              להוסיף.
+              אין עדיין אנשי קשר.
             </p>
           ) : (
             <div className="space-y-3">
@@ -2094,21 +1622,16 @@ export default function PatientCardPage() {
             </div>
           )}
         </div>
-      </section>
+      </Collapsible>
 
-      <section className="card">
-        <div className="px-6 py-5 border-b border-line flex items-center justify-between">
-          <h2 className="section-title">מסמכים</h2>
-          {!uploadOpen && (
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={() => setUploadOpen(true)}
-            >
+      <Collapsible title="מסמכים" count={docs.length + documents.length}>
+        {!uploadOpen && (
+          <div className="px-5 pt-4">
+            <button type="button" className="btn-ghost min-h-[44px]" onClick={() => setUploadOpen(true)}>
               + העלאת מסמכים
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {uploadOpen && (
           <form
@@ -2176,7 +1699,7 @@ export default function PatientCardPage() {
         <div className="p-6">
           {docs.length === 0 && documents.length === 0 ? (
             <p className="text-sm text-ink-500">
-              אין עדיין מסמכים — לחצי על "העלאת מסמכים" כדי להוסיף את הראשון.
+              אין עדיין מסמכים.
             </p>
           ) : (
             <ul className="space-y-2">
@@ -2244,7 +1767,7 @@ export default function PatientCardPage() {
             </ul>
           )}
         </div>
-      </section>
+      </Collapsible>
 
       {error && <p className="text-red-700 text-sm">{error}</p>}
     </div>

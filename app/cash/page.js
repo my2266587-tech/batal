@@ -5,6 +5,7 @@ import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import { DeleteIcon, EditIcon, IconButton } from "@/components/Icons";
 import { formatCurrency, formatDate } from "@/lib/format";
+import { useUI } from "@/components/UIProvider";
 
 // Amounts are stored signed: an addition (money set aside) is positive,
 // a deduction (money given out of it) is negative — so the sum is the
@@ -18,6 +19,7 @@ const emptyForm = {
 };
 
 export default function CashPage() {
+  const ui = useUI();
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -124,7 +126,7 @@ export default function CashPage() {
   }
 
   async function handleDelete(id) {
-    if (!confirm("למחוק את הרישום?")) return;
+    if (!(await ui.confirm({ title: "למחוק את הרישום?", confirmText: "מחיקה", danger: true }))) return;
     const { error } = await supabase
       .from("cash_records")
       .delete()
@@ -158,10 +160,7 @@ export default function CashPage() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="page-title">מעשר געלט</h1>
-          <p className="page-subtitle">
-            הוספה — כסף שנכנס לקופה. הורדה — כסף שיצא ממנה. היתרה מחושבת
-            אוטומטית.
-          </p>
+          <p className="page-subtitle">הוספה — נכנס לקופה · הורדה — יצא ממנה</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <input

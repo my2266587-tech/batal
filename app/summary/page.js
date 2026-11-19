@@ -222,7 +222,7 @@ export default function SummaryPage() {
   if (!supabaseReady) {
     return (
       <div className="space-y-6">
-        <h1 className="page-title">סיכום שעות ותשלום לפי מטופל</h1>
+        <h1 className="page-title">סיכום לפי מטופל</h1>
         <SetupNotice />
       </div>
     );
@@ -231,8 +231,7 @@ export default function SummaryPage() {
   return (
     <div className="space-y-8">
       <header>
-        <h1 className="page-title">סיכום שעות ותשלום לפי מטופל</h1>
-        <p className="page-subtitle">פירוט שעות ותשלומים מצטברים לכל מטופל.</p>
+        <h1 className="page-title">סיכום לפי מטופל</h1>
       </header>
 
       {(todayEvents.length > 0 ||

@@ -7,6 +7,7 @@ import { DeleteIcon, IconButton } from "@/components/Icons";
 import MultiFilePicker from "@/components/MultiFilePicker";
 import { formatDate } from "@/lib/format";
 import { describeError, uploadPatientDocuments } from "@/lib/patientDocuments";
+import { useUI } from "@/components/UIProvider";
 
 function storagePathFromUrl(url) {
   const m = String(url || "").match(
@@ -16,6 +17,7 @@ function storagePathFromUrl(url) {
 }
 
 export default function DocumentsPage() {
+  const ui = useUI();
   const [patients, setPatients] = useState([]);
   const [docs, setDocs] = useState([]);
   const [taskDocs, setTaskDocs] = useState([]);
@@ -160,7 +162,7 @@ export default function DocumentsPage() {
   }
 
   async function deleteDoc(doc) {
-    if (!confirm("למחוק את המסמך?")) return;
+    if (!(await ui.confirm({ title: "למחוק את המסמך?", confirmText: "מחיקה", danger: true }))) return;
     const path = storagePathFromUrl(doc.file_url);
     if (path) {
       const { error: rmErr } = await supabase.storage
@@ -198,9 +200,6 @@ export default function DocumentsPage() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="page-title">מסמכים</h1>
-          <p className="page-subtitle">
-            ניהול מסמכים של מטופלים, עם סינון לפי מטופל.
-          </p>
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-ink-500">סה״כ: {totalCount}</span>

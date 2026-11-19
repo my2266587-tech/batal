@@ -5,6 +5,7 @@ import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import { ChevronDownIcon, DeleteIcon, IconButton } from "@/components/Icons";
 import { formatDate } from "@/lib/format";
+import { useUI } from "@/components/UIProvider";
 
 // Review inbox for phone recordings (Yemot). A recording does NOT create a task
 // on its own — it lands here in the `phone_recordings` table. The user goes over
@@ -36,6 +37,7 @@ function effStatus(r) {
 }
 
 export default function PhoneTasksPage() {
+  const ui = useUI();
   const [rows, setRows] = useState([]);
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -228,7 +230,7 @@ export default function PhoneTasksPage() {
   }
 
   async function handleDelete(id) {
-    if (!confirm("למחוק את ההקלטה הזו לצמיתות?")) return;
+    if (!(await ui.confirm({ title: "למחוק את ההקלטה?", message: "אי אפשר לבטל את המחיקה.", confirmText: "מחיקה", danger: true }))) return;
     const { error: err } = await supabase
       .from("phone_recordings")
       .delete()
@@ -294,10 +296,7 @@ export default function PhoneTasksPage() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="page-title">טלפונים ממתינים</h1>
-          <p className="page-subtitle">
-            הקלטות שנקלטו מהטלפון — לעבור על המלל, לשייך מטופלת ולאשר. משימה
-            נוצרת רק בעת האישור.
-          </p>
+          <p className="page-subtitle">שומעים או קוראים, בוחרים מטופל ומאשרים.</p>
         </div>
         <input
           type="search"

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useUI } from "@/components/UIProvider";
 
 function MicIcon({ className = "w-4 h-4" }) {
   return (
@@ -47,6 +48,7 @@ export default function VoiceButton({
   lang = "he-IL",
   size = "sm",
 }) {
+  const ui = useUI();
   const [listening, setListening] = useState(false);
   const [supported, setSupported] = useState(true);
   const recognitionRef = useRef(null);
@@ -67,9 +69,7 @@ export default function VoiceButton({
     const SR =
       window.SpeechRecognition || window.webkitSpeechRecognition || null;
     if (!SR) {
-      alert(
-        "הדפדפן הזה לא תומך בהקלטה. נסי להשתמש ב-Chrome / Edge / Safari על מובייל.",
-      );
+      ui.toast("הדפדפן הזה לא תומך בהקלטה. נסי להשתמש ב-Chrome / Edge / Safari על מובייל.", "error");
       return;
     }
 
@@ -101,17 +101,15 @@ export default function VoiceButton({
       console.error("[voice] error:", e);
       setListening(false);
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-        alert(
-          "אין הרשאה למיקרופון. אפשרי בהגדרות הדפדפן (אייקון נעילה ליד הכתובת).",
-        );
+        ui.toast("אין הרשאה למיקרופון. אפשרי בהגדרות הדפדפן (אייקון נעילה ליד הכתובת).", "error");
       } else if (e.error === "no-speech") {
         // common when user stays silent — no popup
       } else if (e.error === "audio-capture") {
-        alert("לא נמצא מיקרופון. ודאי שהוא מחובר ופועל.");
+        ui.toast("לא נמצא מיקרופון. ודאי שהוא מחובר ופועל.", "error");
       } else if (e.error === "network") {
-        alert("שגיאת רשת. ה-Speech API דורש אינטרנט פעיל.");
+        ui.toast("שגיאת רשת. ה-Speech API דורש אינטרנט פעיל.", "error");
       } else {
-        alert("שגיאה בהקלטה: " + e.error);
+        ui.toast("שגיאה בהקלטה: " + e.error, "error");
       }
     };
 
@@ -122,7 +120,7 @@ export default function VoiceButton({
     } catch (err) {
       console.error("[voice] start failed:", err);
       setListening(false);
-      alert("לא ניתן להתחיל הקלטה: " + err.message);
+      ui.toast("לא ניתן להתחיל הקלטה: " + err.message, "error");
     }
   }
 

@@ -9,9 +9,7 @@ export default function ImportPage() {
     <div className="space-y-6">
       <header>
         <h1 className="page-title">ייבוא</h1>
-        <p className="page-subtitle">
-          ייבוא רב-שימושי לטבלאות המערכת. בחר תחילה לאן לייבא, הורד תבנית, והעלה קובץ.
-        </p>
+        <p className="page-subtitle">בוחרים לאן לייבא, מורידים תבנית ומעלים קובץ.</p>
       </header>
       {supabaseReady ? <DataImport onDone={() => {}} /> : <SetupNotice />}
     </div>

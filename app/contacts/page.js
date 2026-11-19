@@ -5,6 +5,7 @@ import { supabase, supabaseReady } from "@/lib/supabaseClient";
 import SetupNotice from "@/components/SetupNotice";
 import { DeleteIcon, EditIcon, IconButton } from "@/components/Icons";
 import { formatDate } from "@/lib/format";
+import { useUI } from "@/components/UIProvider";
 
 const CONTACT_TYPES = [
   "ביטוח לאומי",
@@ -29,6 +30,7 @@ const emptyForm = {
 };
 
 export default function ContactsPage() {
+  const ui = useUI();
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -133,12 +135,13 @@ export default function ContactsPage() {
   }
 
   async function handleDelete(id) {
-    if (
-      !confirm(
-        "למחוק את גורם הקשר? פעולה זו תסיר אותו גם מכל המטופלות שאליהן הוא משויך.",
-      )
-    )
-      return;
+    const ok = await ui.confirm({
+      title: "למחוק את איש הקשר?",
+      message: "הוא יוסר גם מכל המטופלים שהוא משויך אליהם.",
+      confirmText: "מחיקה",
+      danger: true,
+    });
+    if (!ok) return;
     const { error } = await supabase.from("contacts").delete().eq("id", id);
     if (error) setError(error.message);
     else load();
@@ -164,7 +167,7 @@ export default function ContactsPage() {
   if (!supabaseReady) {
     return (
       <div className="space-y-6">
-        <h1 className="page-title">גורמי קשר</h1>
+        <h1 className="page-title">אנשי קשר</h1>
         <SetupNotice />
       </div>
     );
@@ -174,11 +177,7 @@ export default function ContactsPage() {
     <div className="space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="page-title">גורמי קשר</h1>
-          <p className="page-subtitle">
-            ניהול אנשי קשר חיצוניים — ביטוח לאומי, קופ"ח, רווחה, רופאים, מטפלים
-            וכו'.
-          </p>
+          <h1 className="page-title">אנשי קשר</h1>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <input

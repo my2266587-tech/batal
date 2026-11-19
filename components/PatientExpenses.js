@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { useUI } from "@/components/UIProvider";
 import { DeleteIcon, IconButton } from "@/components/Icons";
 import { formatCurrency, formatDate } from "@/lib/format";
 
@@ -36,9 +37,9 @@ export function expenseKind(t) {
 
 // Colours live in app/globals.css (.row-* / .badge-*).
 export const EXPENSE_STYLES = {
-  travel: { label: "נסיעה / מונית", row: "row-travel", badge: "badge-travel" },
-  doctor: { label: "תשלום לרופא", row: "row-doctor", badge: "badge-doctor" },
-  other: { label: "הוצאה אחרת", row: "row-expense", badge: "badge-expense" },
+  travel: { label: "נסיעה / מונית", row: "row-travel", badge: "badge-travel", tint: "tint-travel" },
+  doctor: { label: "תשלום לרופא", row: "row-doctor", badge: "badge-doctor", tint: "tint-doctor" },
+  other: { label: "הוצאה אחרת", row: "row-expense", badge: "badge-expense", tint: "tint-expense" },
 };
 
 export function ExpenseLegend() {
@@ -67,21 +68,29 @@ const QUICK_ADD = [
   { type: "other", description: "", text: "+ שורה אחרת" },
 ];
 
-function today() {
-  return new Date().toISOString().slice(0, 10);
+// Local (Israel) date, not UTC — after midnight toISOString() is still "yesterday".
+export function todayLocal() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-export default function PatientExpenses({ patientId, tasks, onSaved }) {
-  const [open, setOpen] = useState(false);
-  const [date, setDate] = useState("");
+// Rendered by the patient card only while the form is open (one of the big
+// action buttons opens it); closes itself after a successful save.
+export default function PatientExpenses({ patientId, tasks, onSaved, onClose }) {
+  const ui = useUI();
+  const [date, setDate] = useState(todayLocal);
   const [treatmentId, setTreatmentId] = useState("");
-  const [lines, setLines] = useState([]);
+  const [lines, setLines] = useState(() => [
+    newLine("travel", "מונית הלוך"),
+    newLine("travel", "מונית חזור"),
+  ]);
   const [billPatient, setBillPatient] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   // Treatments/meetings she can attach the expenses to (not other expense
-  // rows or one-off charges with no hours), newest first.
+  // rows), newest first.
   const treatments = useMemo(
     () =>
       tasks
@@ -93,27 +102,7 @@ export default function PatientExpenses({ patientId, tasks, onSaved }) {
     [tasks],
   );
 
-  const expenseRows = useMemo(() => tasks.filter(isExpenseRow), [tasks]);
-  const expensesTotal = expenseRows.reduce(
-    (s, t) => s + (Number(t.total_after_discount) || 0),
-    0,
-  );
-
   const linesTotal = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
-
-  function openForm() {
-    setDate(today());
-    setTreatmentId("");
-    setLines([newLine("travel", "מונית הלוך"), newLine("travel", "מונית חזור")]);
-    setBillPatient(true);
-    setError("");
-    setOpen(true);
-  }
-
-  function closeForm() {
-    setOpen(false);
-    setError("");
-  }
 
   function chooseTreatment(id) {
     setTreatmentId(id);
@@ -134,7 +123,7 @@ export default function PatientExpenses({ patientId, tasks, onSaved }) {
     // A line left without an amount (e.g. no taxi back) is simply skipped.
     const filled = lines.filter((l) => String(l.amount).trim() !== "");
     if (filled.length === 0) {
-      setError("יש להוסיף לפחות שורה אחת עם סכום.");
+      setError("לא הוזן אף סכום.");
       return;
     }
     for (const l of filled) {
@@ -184,34 +173,15 @@ export default function PatientExpenses({ patientId, tasks, onSaved }) {
       if (data?.length) onSaved?.();
       return;
     }
-    setOpen(false);
+    const total = rows.reduce((sum, r) => sum + r.total_after_discount, 0);
+    ui.toast(`נשמר: ${formatCurrency(total)}`);
     onSaved?.();
+    onClose?.();
   }
 
   return (
-    <section className="card p-5">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div>
-          <h2 className="section-title">נסיעות והוצאות</h2>
-          <p className="text-xs text-ink-500 mt-1">
-            נסיעות (מונית הלוך/חזור) ותשלומים ששילמת עבור המטופל (למשל לרופא).
-            כל שורה נכנסת לחוב הפתוח, ואפשר לסגור אותה דרך "רישום תשלום".
-          </p>
-          {expenseRows.length > 0 && (
-            <p className="text-xs text-ink-700 mt-1">
-              עד היום נרשמו {expenseRows.length} שורות בסך{" "}
-              <span className="font-semibold">{formatCurrency(expensesTotal)}</span>
-            </p>
-          )}
-        </div>
-        {!open && (
-          <button type="button" className="btn-primary" onClick={openForm}>
-            + נסיעות והוצאות
-          </button>
-        )}
-      </div>
-
-      {open && (
+    <section className="card p-5 border-accent-200">
+      <h2 className="text-xl font-bold text-ink-900">נסיעה / הוצאה</h2>
         <form onSubmit={save} className="space-y-4 mt-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
@@ -228,7 +198,7 @@ export default function PatientExpenses({ patientId, tasks, onSaved }) {
             </div>
             <div className="md:col-span-3 min-w-0">
               <label className="label" htmlFor="expense-treatment">
-                בטיפול (לא חובה)
+                באיזה טיפול? (לא חובה)
               </label>
               <select
                 id="expense-treatment"
@@ -321,7 +291,7 @@ export default function PatientExpenses({ patientId, tasks, onSaved }) {
               checked={billPatient}
               onChange={(e) => setBillPatient(e.target.checked)}
             />
-            להוסיף לחוב של המטופל (בלי סימון — יירשם כ"לא לחיוב")
+            המטופל צריך להחזיר לי את זה
           </label>
 
           <div className="text-sm">
@@ -331,15 +301,14 @@ export default function PatientExpenses({ patientId, tasks, onSaved }) {
 
           {error && <p className="text-red-700 text-sm">{error}</p>}
           <div className="flex gap-3 flex-wrap">
-            <button type="submit" className="btn-primary" disabled={saving}>
+            <button type="submit" className="btn-primary min-h-[44px] px-8" disabled={saving}>
               {saving ? "שומר..." : "שמירה"}
             </button>
-            <button type="button" className="btn-ghost" onClick={closeForm} disabled={saving}>
+            <button type="button" className="btn-ghost min-h-[44px]" onClick={onClose} disabled={saving}>
               ביטול
             </button>
           </div>
         </form>
-      )}
     </section>
   );
 }
