@@ -15,6 +15,12 @@ html, body {
   box-sizing: border-box;
 }
 
+/* Computer screens: a slightly smaller base size, so the whole interface
+   scales down evenly. Phones keep 16px (readable, and no zoom on input focus). */
+@media (min-width: 768px) {
+  html { font-size: 15px; }
+}
+
 @layer components {
   .btn {
     @apply inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium transition-colors;
@@ -43,7 +49,7 @@ html, body {
     @apply card p-6;
   }
   .table-base {
-    @apply w-full text-right text-[0.9375rem] leading-6 tabular-nums;
+    @apply w-full text-right text-sm leading-6 tabular-nums;
   }
   .table-base thead th {
     @apply bg-surface-subtle text-ink-600 text-sm font-semibold px-4 py-3 border-b border-line whitespace-nowrap;
@@ -82,7 +88,7 @@ html, body {
     @apply text-3xl font-bold text-accent-600 mt-2 tracking-tight tabular-nums;
   }
   .badge {
-    @apply inline-flex items-center px-2.5 py-1 rounded-md text-[0.8125rem] font-medium leading-4;
+    @apply inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium leading-4;
   }
   .badge-success { @apply badge bg-tag-success-bg text-tag-success-fg; }
   .badge-warning { @apply badge bg-tag-warning-bg text-tag-warning-fg; }
